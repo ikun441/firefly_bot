@@ -1,0 +1,121 @@
+app:
+  name: 流萤 Firefly
+  subtitle: 智能财报总结与财税优化助手
+  version: 0.1.0
+  debug: false
+  timezone: Asia/Shanghai
+server:
+  host: 127.0.0.1
+  port: 2525
+  show_welcome: true
+database:
+  url: sqlite+aiosqlite:///./data/firefly.db
+  echo: false
+llm:
+  enabled: true
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  temperature: 0.3
+  max_tokens: 4096
+  timeout: 60
+  max_retries: 2
+  api_key_env: LLM_API_KEY
+ledger:
+  currency: CNY
+  currency_symbol: ¥
+  default_period: monthly
+  custom_period_days:
+  - 7
+  - 14
+  - 30
+  - 60
+  - 90
+  - 180
+  - 365
+  large_amount_threshold: 5000
+  duplicate_window_minutes: 10
+  auto_confirm_hours: 0
+collector:
+  allow_custom_category: true
+  quick_amounts:
+  - 10
+  - 50
+  - 100
+  - 200
+  - 500
+  - 1000
+  memo_required: false
+anomaly:
+  enabled: true
+  method: zscore
+  zscore_threshold: 2.5
+  min_samples: 10
+  risk_keywords_weight: 0.6
+tax_check:
+  enabled: true
+  taxpayer_type: small_scale
+  vat_rate_small_scale: 1.0
+  vat_rate_general: 6.0
+  vat_threshold_monthly: 100000
+  tax_burden_low: 1.0
+  tax_burden_high: 8.0
+  category_concentration_warn: 40.0
+  disclaimer: 本结果由系统依据公开政策规则自动生成，仅供参考，不构成专业税务意见，请以主管税务机关口径为准。
+budget:
+  enabled: true
+  warn_ratio: 0.8
+  over_ratio: 1.0
+alert:
+  enabled: true
+  daily_expense_limit: 3000.0
+  low_balance_threshold: 1000
+push:
+  enabled: true
+  target_type: private
+  target_id: ''
+  schedule_times:
+  - 09:00
+  send_image: true
+  send_summary_text: true
+  report_period: monthly
+  image_width: 800
+  image_scale: 3
+  image_max_height: 6000
+  content_type: both
+  ai_summary: false
+  ai_temperature: 0.5
+  ai_max_tokens: 800
+subscription:
+  enabled: true
+  run_day: 1
+  run_time: 08:00
+ui:
+  theme: firefly-dark
+  accent_color: '#5eead4'
+  particle_enabled: true
+  report_animation: true
+  counter_duration: 1200
+  page_size: 20
+rag:
+  enabled: true
+  persist_dir: ./data/chroma
+  collection_name: tax_policy
+  top_k: 3
+  score_threshold: 0.3
+audit:
+  enabled: true
+  track_adoption: true
+auth:
+  enabled: true
+  username: admin
+  password: Firefly2026
+  password_hash: 03ebc0db7ccddc03845fa93afbbc0482b2c049fee7cb047d1f9d8e2e4b293b70
+  password_salt: d2b7d2c2cdc077bb0dd4da698a3080d0
+  secret_key: U6pMlDKQsOuGsQV1sIJbUO6WspKlCKWrTiKZD_zyk4I
+  session_hours: 12
+  max_attempts: 5
+  lockout_minutes: 15
+  attempt_window_minutes: 10
+  require_strong_password: true
+  min_password_length: 8
+  allow_default_password: true

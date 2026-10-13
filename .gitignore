@@ -1,0 +1,93 @@
+# ==============================================================================
+# 流萤 Firefly · Git 忽略规则
+# ==============================================================================
+
+# ------------------------------ 敏感信息 --------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ------------------------------ 运行时数据 ------------------------------------
+data/
+*.db
+*.sqlite
+*.sqlite3
+data/chroma/
+data/reports/
+data/exports/
+logs/
+*.log
+
+# ------------------------------ Python ----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+venv/
+.venv/
+env/
+ENV/
+.miniforge/
+conda-env/
+
+# ------------------------------ 测试与覆盖率 ----------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ------------------------------ 类型检查与格式化 -------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+
+# ------------------------------ 前端 ------------------------------------------
+node_modules/
+# 前端为原生 HTML/CSS/JS，无构建产物；以下为编辑器临时文件
+*.tmp
+*.bak
+
+# ------------------------------ 编辑器 / 系统 ----------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ------------------------------ 渲染临时文件 ----------------------------------
+firefly/render/cache/
+*.png.tmp
