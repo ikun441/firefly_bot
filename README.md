@@ -1671,6 +1671,7 @@ OpenAI SDK 3.29 · ChromaDB 1.5 · RapidFuzz · Pandas 3.0
 ---
 
 ## 加入社群
+<img width="1284" height="2283" alt="微信图片_20261013231908_10_72" src="https://github.com/user-attachments/assets/75d0454b-eea8-43dd-a5b9-d7442a4ff01d" />
 
 
 
