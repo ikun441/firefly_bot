@@ -49,6 +49,9 @@ env/
 ENV/
 .miniforge/
 conda-env/
+# 一键启动脚本（start.sh / start.cmd）创建的虚拟环境。
+# 不排除的话会被 git add -A 整个提交进去（上万个文件）。
+firefly_env/
 
 # ------------------------------ 测试与覆盖率 ----------------------------------
 .pytest_cache/
