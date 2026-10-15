@@ -3,7 +3,7 @@
 #  流萤 Firefly · macOS / Linux 一键启动脚本
 # -----------------------------------------------------------------------------
 #  依次完成：检查 Python -> 创建/激活 venv(firefly) -> 安装依赖
-#            -> 检查配置 -> 启动服务 -> 显示访问地址
+#            -> 安装 Playwright 内核 -> 检查配置 -> 启动服务
 #
 #  用法：
 #     chmod +x start.sh      # 首次需要赋予执行权限
@@ -69,7 +69,7 @@ fi
 # -----------------------------------------------------------------------------
 #  1. 检查 Python 环境
 # -----------------------------------------------------------------------------
-step "1/5" "检查 Python 环境..."
+step "1/6" "检查 Python 环境..."
 
 PY_CMD=""
 
@@ -202,7 +202,7 @@ ok "$PY_CMD ($PY_VER)  OK"
 # -----------------------------------------------------------------------------
 #  2. 创建并激活虚拟环境
 # -----------------------------------------------------------------------------
-step "2/5" "准备虚拟环境 (${VENV_NAME})..."
+step "2/6" "准备虚拟环境 (${VENV_NAME})..."
 
 if [ -x "${VENV_DIR}/bin/python" ]; then
     info "已存在，跳过创建"
@@ -232,7 +232,7 @@ ok "已激活：$VENV_PY"
 # -----------------------------------------------------------------------------
 #  3. 检查并安装依赖
 # -----------------------------------------------------------------------------
-step "3/5" "检查依赖..."
+step "3/6" "检查依赖..."
 
 # 用 requirements.txt 的哈希做标记：文件没变就跳过安装，避免每次启动都等几分钟
 HASH_FILE="${VENV_DIR}/.requirements.sha256"
@@ -286,9 +286,54 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-#  4. 检查配置文件
+#  4. 安装 Playwright 浏览器内核
 # -----------------------------------------------------------------------------
-step "4/5" "检查配置文件..."
+# 图片渲染（htmlrender）依赖 Playwright 的 Chromium 内核。
+# pip 装好 playwright 包不等于浏览器可用：内核要单独下载，少这一步会在
+# 真正出图时报 "Executable doesn't exist"，而报错在业务代码里，很难定位。
+step "4/6" "安装 Playwright 浏览器内核..."
+
+# 用 playwright 版本号做标记：版本没变就跳过，避免每次启动都白等一次检查。
+# 标记只在安装成功后写入，失败不会被误记为已完成，下次启动会重试。
+PW_MARKER="${VENV_DIR}/.playwright.version"
+PW_VER="$("$VENV_PY" -c 'import importlib.metadata as m; print(m.version("playwright"))' 2>/dev/null || true)"
+
+NEED_PW_INSTALL=1
+if [ -n "$PW_VER" ] && [ -f "$PW_MARKER" ] \
+        && [ "$(cat "$PW_MARKER" 2>/dev/null)" = "$PW_VER" ]; then
+    NEED_PW_INSTALL=0
+fi
+
+if [ "$NEED_PW_INSTALL" -eq 0 ]; then
+    info "内核已就绪（playwright ${PW_VER}），跳过"
+else
+    info "正在下载 Chromium 内核（首次约需 1-3 分钟，国内网络较慢）..."
+    PW_OK=0
+    "$VENV_PY" -m playwright install chromium && PW_OK=1
+
+    # playwright 只有环境变量这一个换源开关，没有对应的命令行参数
+    if [ "$PW_OK" -eq 0 ]; then
+        warn "默认源失败，改用国内镜像重试..."
+        PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright" \
+            "$VENV_PY" -m playwright install chromium && PW_OK=1
+    fi
+
+    if [ "$PW_OK" -eq 1 ]; then
+        [ -n "$PW_VER" ] && printf '%s' "$PW_VER" > "$PW_MARKER"
+        ok "内核安装完成"
+    else
+        warn "[警告] Chromium 内核安装失败，图片渲染功能将不可用（其余功能不受影响）"
+        info "       可稍后手动执行："
+        info "         ${VENV_PY} -m playwright install chromium"
+        info "       Linux 若缺少系统依赖库，再执行："
+        info "         ${VENV_PY} -m playwright install-deps chromium"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+#  5. 检查配置文件
+# -----------------------------------------------------------------------------
+step "5/6" "检查配置文件..."
 
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
@@ -319,9 +364,9 @@ if [ -f ".env" ] && grep -qE '^[[:space:]]*SUPERUSERS[[:space:]]*=[[:space:]]*$'
 fi
 
 # -----------------------------------------------------------------------------
-#  5. 启动服务
+#  6. 启动服务
 # -----------------------------------------------------------------------------
-step "5/5" "启动服务..."
+step "6/6" "启动服务..."
 
 # 端口占用检查：本项目只允许单实例，端口被占时给出明确提示而不是让启动中途失败
 if command -v lsof >/dev/null 2>&1; then
