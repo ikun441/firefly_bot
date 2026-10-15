@@ -367,7 +367,27 @@ def check_income_expense_inversion(
             suggestion="保持正常经营节奏。",
         )
 
-    ratio = period_expense / period_income if period_income else float("inf")
+    # 收入为 0 时倍数在数学上无定义（除零），文案不能输出 inf。
+    # 改为直接用文字描述这一情形，倍数表述只在收入 > 0 时给出。
+    if period_income <= 0:
+        return _make_result(
+            check_key="income_expense_inversion",
+            title="进销项配比",
+            level=RiskLevel.HIGH,
+            actual=period_expense,
+            threshold=period_income,
+            description=(
+                f"本期收入 {period_income:,.2f} 元，支出 {period_expense:,.2f} 元"
+                f"（无收入但有大额支出），无法计算支出收入倍数，存在进销项倒挂。"
+            ),
+            suggestion=(
+                "1) 核实是否存在未开票收入；"
+                "2) 若为正常亏损，保留完整成本费用凭证备查；"
+                "3) 检查是否有股东借款、个人垫付等未入账事项。"
+            ),
+        )
+
+    ratio = period_expense / period_income
     level = RiskLevel.HIGH if ratio >= 2 else RiskLevel.MEDIUM
     return _make_result(
         check_key="income_expense_inversion",
@@ -376,8 +396,7 @@ def check_income_expense_inversion(
         actual=period_expense,
         threshold=period_income,
         description=(
-            f"本期支出 {period_expense:,.2f} 元超过收入 {period_income:,.2f} 元"
-            f"{'（亏损）' if period_income else '（无收入但有大额支出）'}，"
+            f"本期支出 {period_expense:,.2f} 元超过收入 {period_income:,.2f} 元（亏损），"
             f"支出为收入的 {ratio:.2f} 倍，存在进销项倒挂。"
         ),
         suggestion=(
