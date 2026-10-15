@@ -62,6 +62,9 @@ driver.register_adapter(OneBotV11Adapter)
 if sys.stdout.isatty() and os.getenv("FIREFLY_ENABLE_CONSOLE_BOT", "").strip().lower() in {"1", "true", "yes"}:
     driver.register_adapter(ConsoleAdapter)
 
+# 加载 NoneBot 插件：chat.py 包含协议端对话式记账、查询、报告等全部命令处理器
+nonebot.load_plugins("firefly/plugins")
+
 
 # ------------------------------------------------------------------------------
 # 生命周期
