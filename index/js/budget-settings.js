@@ -59,7 +59,14 @@
         }
       );
 
-      const budgets = utils.normalizeList(result.data);
+      const budgets = utils
+        .normalizeList(result.data)
+        .map(normalizeBudget)
+        .filter(function (b) {
+          // 列表接口会把「未设预算的类别」也混进来（budget_id 为 null、
+          // state 为 unbudgeted），这些不是用户创建的预算，不渲染。
+          return b.id !== undefined && b.id !== null;
+        });
       utils.store.budgets = budgets;
 
       if (!store_categories_ready()) await utils.loadCategories();
@@ -71,6 +78,35 @@
 
   function store_categories_ready() {
     return utils.store.categories && utils.store.categories.length > 0;
+  }
+
+  /**
+   * 把后端预算对象归一化成 renderList 期望的字段名。
+   *
+   * 后端 GET /api/budgets 返回的是聚合视图：
+   *   budget_id / budget / actual / usage_ratio / name / icon / state
+   * 而创建接口 POST /api/budgets 返回的是原始记录：
+   *   id / amount / category_id / ...
+   * 两套形状都兼容，统一映射成 amount / used / ratio / id / category_name。
+   */
+  function normalizeBudget(b) {
+    var amount = b.budget !== undefined ? b.budget : b.amount;
+    var used = b.actual !== undefined ? b.actual : b.used || 0;
+    var ratio = b.usage_ratio !== undefined && b.usage_ratio !== null ? b.usage_ratio : b.ratio;
+    if (ratio === undefined || ratio === null) {
+      ratio = amount > 0 ? (Number(used) / Number(amount)) * 100 : 0;
+    }
+    return {
+      id: b.budget_id !== undefined ? b.budget_id : b.id,
+      amount: Number(amount) || 0,
+      used: Number(used) || 0,
+      ratio: Number(ratio) || 0,
+      category_name: b.category_name || b.name || '总预算',
+      category_icon: b.category_icon || b.icon || '📦',
+      state: b.state || null,
+      period: b.period,
+      raw: b,
+    };
   }
 
   function renderList(box, budgets, isMock) {
@@ -89,14 +125,14 @@
 
     const grid = el('div');
     budgets.forEach(function (b) {
-      const ratio = Number(b.ratio) !== undefined && b.ratio !== null
-        ? Number(b.ratio)
-        : b.amount > 0
-        ? (Number(b.used || 0) / Number(b.amount)) * 100
-        : 0;
-      const used = Number(b.used || 0);
+      const ratio = Number(b.ratio) || 0;
+      const used = Number(b.used) || 0;
       const limit = Number(b.amount) || 0;
-      const status = used > limit ? 'over' : used > limit * 0.8 ? 'warn' : 'ok';
+      // 优先用后端算好的 state（over/warn/ok），没有才本地推算
+      let status = b.state;
+      if (status !== 'over' && status !== 'warn' && status !== 'ok') {
+        status = used > limit ? 'over' : used > limit * 0.8 ? 'warn' : 'ok';
+      }
       const statusClass = status === 'over' ? 'is-over' : status === 'warn' ? 'is-warn' : 'is-ok';
       const barClass = status === 'over' ? 'is-over' : status === 'warn' ? 'is-warn' : '';
       const tagClass = status === 'over' ? 'is-danger' : status === 'warn' ? 'is-warning' : 'is-success';
@@ -243,14 +279,40 @@
               }
             );
 
-            budgets.push(result.data);
-            FF.toast('预算已保存', 'success');
-            amountInput.value = '';
-
+            // 创建接口返回的是原始记录（id/amount/category_id...），
+            // 与列表接口的聚合形状（budget_id/budget/actual/usage_ratio...）
+            // 完全不同。直接 push 进去必然渲染错，改为整体重新拉取列表。
             const listBox = document.querySelector('.card .budget-item')
               ? document.querySelector('.card .budget-item').parentNode
               : null;
-            if (listBox) renderList(listBox, budgets, result.mock);
+
+            if (result.mock) {
+              budgets.push(normalizeBudget(result.data));
+              FF.toast('预算已保存', 'success');
+              amountInput.value = '';
+              if (listBox) renderList(listBox, budgets, true);
+            } else {
+              try {
+                const fresh = await api.budgets.list();
+                const freshList = utils
+                  .normalizeList(fresh.data)
+                  .map(normalizeBudget)
+                  .filter(function (b) {
+                    return b.id !== undefined && b.id !== null;
+                  });
+                budgets.length = 0;
+                freshList.forEach(function (b) {
+                  budgets.push(b);
+                });
+                utils.store.budgets = budgets;
+                FF.toast('预算已保存', 'success');
+                amountInput.value = '';
+                if (listBox) renderList(listBox, budgets, false);
+              } catch (refreshErr) {
+                // 列表刷新失败不影响保存成功的事实，只是看不到最新执行率
+                FF.toast('预算已保存（列表刷新失败，请刷新页面）', 'warning');
+              }
+            }
           } catch (err) {
             FF.toast('保存失败：' + (err.message || '未知错误'), 'error');
           } finally {
