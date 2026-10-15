@@ -7,7 +7,7 @@ REM ============================================================================
 REM  流萤 Firefly · Windows 一键启动脚本
 REM ----------------------------------------------------------------------------
 REM  依次完成：检查 Python -> 创建/激活 venv(firefly) -> 安装依赖
-REM            -> 检查配置 -> 启动服务 -> 显示访问地址
+REM            -> 安装 Playwright 内核 -> 检查配置 -> 启动服务
 REM
 REM  用法：双击本文件，或在命令行执行  start.cmd
 REM ============================================================================
@@ -35,7 +35,7 @@ echo.
 REM ---------------------------------------------------------------------------
 REM  1. 检查 Python 环境
 REM ---------------------------------------------------------------------------
-echo [1/5] 检查 Python 环境...
+echo [1/6] 检查 Python 环境...
 
 set "PY_CMD="
 
@@ -90,7 +90,7 @@ REM ---------------------------------------------------------------------------
 REM  2. 创建并激活虚拟环境
 REM ---------------------------------------------------------------------------
 echo.
-echo [2/5] 准备虚拟环境 (%VENV_NAME%)...
+echo [2/6] 准备虚拟环境 (%VENV_NAME%)...
 
 if exist "%VENV_DIR%\Scripts\python.exe" (
     echo       已存在，跳过创建
@@ -126,7 +126,7 @@ REM ---------------------------------------------------------------------------
 REM  3. 检查并安装依赖
 REM ---------------------------------------------------------------------------
 echo.
-echo [3/5] 检查依赖...
+echo [3/6] 检查依赖...
 
 REM 用 requirements.txt 的哈希做标记：文件没变就跳过安装，避免每次启动都等几分钟
 set "HASH_FILE=%VENV_DIR%\.requirements.sha256"
@@ -180,10 +180,70 @@ if "!NEED_INSTALL!"=="1" (
 )
 
 REM ---------------------------------------------------------------------------
-REM  4. 检查配置文件
+REM  4. 安装 Playwright 浏览器内核
+REM ---------------------------------------------------------------------------
+REM 图片渲染（htmlrender）依赖 Playwright 的 Chromium 内核。
+REM pip 装好 playwright 包不等于浏览器可用：内核要单独下载，少这一步会在
+REM 真正出图时报 "Executable doesn't exist"，而报错在业务代码里，很难定位。
+echo.
+echo [4/6] 安装 Playwright 浏览器内核...
+
+REM 用 playwright 版本号做标记：版本没变就跳过，避免每次启动都白等一次检查。
+set "PW_MARKER=%VENV_DIR%\.playwright.version"
+set "PW_VER_FILE=%TEMP%\firefly_pw_ver.txt"
+set "PW_VER="
+"!VENV_PY!" -c "import importlib.metadata as m; print(m.version('playwright'))" >"!PW_VER_FILE!" 2>nul
+if exist "!PW_VER_FILE!" (
+    set /p PW_VER=<"!PW_VER_FILE!"
+    del "!PW_VER_FILE!" >nul 2>&1
+)
+
+set "NEED_PW_INSTALL=1"
+if not "!PW_VER!"=="" (
+    if exist "!PW_MARKER!" (
+        set /p OLD_PW_VER=<"!PW_MARKER!"
+        if "!OLD_PW_VER!"=="!PW_VER!" set "NEED_PW_INSTALL=0"
+    )
+)
+
+if "!NEED_PW_INSTALL!"=="0" (
+    echo       内核已就绪（playwright !PW_VER!），跳过
+) else (
+    echo       正在下载 Chromium 内核（首次约需 1-3 分钟，国内网络较慢）...
+    set "PW_RC=0"
+    "!VENV_PY!" -m playwright install chromium
+    set "PW_RC=!errorlevel!"
+
+    REM playwright 只有环境变量这一个换源开关，没有对应的命令行参数
+    if not "!PW_RC!"=="0" (
+        echo       默认源失败，改用国内镜像重试...
+        set "PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright"
+        "!VENV_PY!" -m playwright install chromium
+        set "PW_RC=!errorlevel!"
+        set "PLAYWRIGHT_DOWNLOAD_HOST="
+    )
+
+    if not "!PW_RC!"=="0" (
+        echo.
+        echo       [警告] Chromium 内核安装失败，图片渲染功能将不可用。
+        echo              其余功能不受影响，服务会继续启动。
+        echo              可稍后手动执行：
+        echo                  "!VENV_PY!" -m playwright install chromium
+        echo              Linux 若缺少系统依赖库，再执行：
+        echo                  "!VENV_PY!" -m playwright install-deps chromium
+        echo.
+    ) else (
+        REM 安装成功才写标记，失败不会被误记为已完成，下次启动会重试
+        >"!PW_MARKER!" echo !PW_VER!
+        echo       内核安装完成
+    )
+)
+
+REM ---------------------------------------------------------------------------
+REM  5. 检查配置文件
 REM ---------------------------------------------------------------------------
 echo.
-echo [4/5] 检查配置文件...
+echo [5/6] 检查配置文件...
 
 if not exist ".env" (
     if exist ".env.example" (
@@ -199,10 +259,10 @@ if not exist ".env" (
 )
 
 REM ---------------------------------------------------------------------------
-REM  5. 启动服务
+REM  6. 启动服务
 REM ---------------------------------------------------------------------------
 echo.
-echo [5/5] 启动服务...
+echo [6/6] 启动服务...
 echo.
 
 REM 端口占用检查：本项目只允许单实例，端口被占时给出明确提示而不是让启动中途失败
