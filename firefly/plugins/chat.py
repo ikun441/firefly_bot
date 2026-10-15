@@ -52,7 +52,7 @@ record = on_message(rule=to_me(), priority=20, block=False)
 @record.handle()
 async def _handle_message(bot: Bot, event: Event) -> None:
     """把用户说的话交给意图规划器：记账 / 查询 / 不懂。"""
-    from ..ai.assistant import answer_question, rule_plan
+    from ..ai.assistant import answer_question
     from ..ai.natural import extract_transactions
     from ..db.session import session_scope
     from ..services import ledger as ledger_service
@@ -62,12 +62,17 @@ async def _handle_message(bot: Bot, event: Event) -> None:
     if not text or text.startswith("/"):
         return
 
-    # 先判断是不是在记账：带金额的句子交给抽取器
-    plan = rule_plan(text)
-    looks_like_record = bool(re.search(r"\d", text)) and plan.get("intent") in ("unknown", None)
+    # 先判断是不是在记账：带金额的句子交给抽取器。
+    # 注意不能拿 rule_plan 的 intent 来判断 —— rule_plan 是为「查询」设计的，
+    # 记账句里的类别词（打车/吃饭/咖啡…）会命中 CATEGORY_KEYWORDS，
+    # 返回 sum_by_category 而非 unknown，导致 looks_like_record 恒为 False，
+    # 记账句被当成查询、永远不落库。
+    # 因此这里只看「是否含金额数字」，交给 extract_transactions 去抽取；
+    # 抽取不出金额再回退成查询。
+    looks_like_record = bool(re.search(r"\d", text))
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         await ledger_service.ensure_default_categories(session, user_id=user.id)
         categories = [
             item.name
@@ -98,10 +103,27 @@ async def _handle_message(bot: Bot, event: Event) -> None:
     await record.finish(Message(answer))
 
 
+async def _default_account_id(session, user_id: int):
+    """取用户的默认账户 id，供 Bot 记账时自动关联。
+
+    协议端（QQ）没有「选账本」这一步，若不关联账户，Bot 记的账
+    account_id 恒为 None —— 数据虽然落库，但永远不进任何账户余额，
+    前端「账户余额 / 净资产」也不会变。这里兜底到第一个账户。
+    """
+    from ..services import ledger as ledger_service
+
+    await ledger_service.ensure_default_account(session, user_id=user_id)
+    accounts = await ledger_service.list_accounts(session, user_id=user_id)
+    if accounts:
+        return accounts[0].id
+    return None
+
+
 async def _persist_items(session, user_id: str, items) -> list:
     """把抽取结果落库，返回给用户看的确认行。"""
     from ..services import ledger as ledger_service
 
+    account_id = await _default_account_id(session, user_id)
     lines = []
     for item in items:
         category = None
@@ -120,6 +142,7 @@ async def _persist_items(session, user_id: str, items) -> list:
             amount=item.get("amount") or 0,
             direction=item.get("direction") or "expense",
             category_id=category.id if category else None,
+            account_id=account_id,
             trade_time=_parse_time(item.get("trade_time")),
             counterparty=item.get("counterparty"),
             memo=item.get("memo"),
@@ -186,7 +209,7 @@ async def _cmd_record(bot: Bot, event: Event) -> None:
     memo = " ".join(parts[2:]) if len(parts) > 2 else None
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         await ledger_service.ensure_default_categories(session, user_id=user.id)
         category = await ledger_service.get_category_by_name(
             session, user_id=user.id, name=category_name
@@ -202,6 +225,7 @@ async def _cmd_record(bot: Bot, event: Event) -> None:
             amount=amount,
             direction=category.direction if category else "expense",
             category_id=category.id if category else None,
+            account_id=await _default_account_id(session, user.id),
             # 带时区：SQLModel 的 DateTime 拒绝 naive 值
             trade_time=datetime.now(timezone.utc),
             memo=memo,
@@ -245,7 +269,7 @@ async def _cmd_report(bot: Bot, event: Event) -> None:
     await cmd_report.send(Message("⏳ 正在生成报告，请稍候…"))
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         report = await report_service.generate_report(
             session, user_id=user.id, period=period, persist=True, channel="bot"
         )
@@ -284,7 +308,7 @@ async def _cmd_taxcheck(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         start, end = ledger_service.period_bounds("monthly")
         result = await taxcheck.run_tax_check(session, user_id=user.id, start=start, end=end)
         await session.commit()
@@ -322,7 +346,7 @@ async def _cmd_list(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         items = await ledger_service.list_transactions(
             session, user_id=user.id, limit=10, order_desc=True
         )
@@ -353,7 +377,7 @@ async def _cmd_budget(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session, platform_id=str(event.get_user_id()))
+        user = await get_or_create_user(session)
         start, end = ledger_service.period_bounds("monthly")
         status = await budget_service.get_budget_status(
             session, user_id=user.id, start=start, end=end, period="monthly"
