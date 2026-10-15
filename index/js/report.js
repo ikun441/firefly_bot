@@ -792,7 +792,34 @@
   }
 
   function buildBudgetTable(budgets) {
-    if (!budgets.length) {
+    // 后端 budget.items 的形状是 {budget_id, name, icon, budget, actual,
+    // usage_ratio, state}，与表格渲染需要的字段名不同，这里统一归一化。
+    const rows = budgets
+      .map(function (b) {
+        return {
+          id: b.budget_id !== undefined ? b.budget_id : b.id,
+          category_name: b.category_name || b.name || '未命名类别',
+          icon: b.icon || '📦',
+          budget: Number(b.budget !== undefined ? b.budget : b.amount) || 0,
+          used: Number(b.actual !== undefined ? b.actual : b.used) || 0,
+          ratio:
+            b.ratio !== undefined && b.ratio !== null
+              ? Number(b.ratio)
+              : b.usage_ratio !== undefined && b.usage_ratio !== null
+              ? Number(b.usage_ratio)
+              : b.budget > 0
+              ? (Number(b.actual || 0) / Number(b.budget)) * 100
+              : 0,
+          status: b.status || b.state,
+        };
+      })
+      // 过滤「未设预算的类别」（budget_id 为 null、state 为 unbudgeted）：
+      // 它们不是用户设定的预算，混进表里只会出现一排 ¥0/¥0 的行。
+      .filter(function (b) {
+        return b.id !== undefined && b.id !== null && b.status !== 'unbudgeted';
+      });
+
+    if (!rows.length) {
       return el('div.empty', {}, [
         el('div.empty-icon', { text: '🎯' }),
         el('div.empty-title', { text: '尚未设置预算' }),
@@ -814,7 +841,7 @@
     );
 
     const tbody = el('tbody');
-    budgets.forEach(function (b) {
+    rows.forEach(function (b) {
       const statusClass = b.status === 'over' ? 'is-over' : b.status === 'warn' ? 'is-warn' : 'is-ok';
       const tagClass = b.status === 'over' ? 'is-danger' : b.status === 'warn' ? 'is-warning' : 'is-success';
       const tagText = b.status === 'over' ? '已超支' : b.status === 'warn' ? '接近上限' : '正常';
