@@ -17,6 +17,85 @@
     return Array.prototype.slice.call((scope || document).querySelectorAll(selector));
   };
 
+  const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const countJobs = new WeakMap();
+  const textJobs = new WeakMap();
+  const chartEntries = new Map();
+  const revealTargets = new Set();
+  const revealObserver = 'IntersectionObserver' in window ? new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add('is-visible');
+      revealObserver.unobserve(entry.target);
+      revealTargets.delete(entry.target);
+    });
+  }, { threshold: .06, rootMargin: '0px 0px -16px 0px' }) : null;
+
+  function observeReveal(root) {
+    $$('.reveal:not(.is-visible)', root).forEach(function (node, i) {
+      if (revealTargets.has(node)) return;
+      if (!revealObserver || motionPreference.matches) { node.classList.add('is-visible'); return; }
+      node.style.setProperty('--reveal-delay', Math.min(i * 35, 140) + 'ms');
+      revealTargets.add(node);
+      revealObserver.observe(node);
+    });
+  }
+
+  function releaseVisuals(root) {
+    revealTargets.forEach(function (node) {
+      if (!root.contains(node)) return;
+      revealObserver.unobserve(node);
+      revealTargets.delete(node);
+    });
+    chartEntries.forEach(function (entry, parent) {
+      if (!root.contains(entry.canvas)) return;
+      if (chartObserver) chartObserver.unobserve(parent);
+      chartEntries.delete(parent);
+    });
+  }
+
+  let chartFrame = null;
+  const chartObserver = 'ResizeObserver' in window ? new ResizeObserver(function (entries) {
+    entries.forEach(function (item) {
+      const entry = chartEntries.get(item.target);
+      if (entry && item.contentRect.width > 0 && (Math.abs(entry.width - item.contentRect.width) > 1 || Math.abs(entry.height - item.contentRect.height) > 1)) entry.dirty = true;
+    });
+    if (chartFrame !== null) return;
+    chartFrame = requestAnimationFrame(function () {
+      chartFrame = null;
+      chartEntries.forEach(function (entry) { if (entry.dirty) paintChart(entry); });
+    });
+  }) : null;
+
+  function paintChart(entry) {
+    if (!entry.canvas.isConnected || entry.canvas.closest('[hidden]')) return;
+    entry.dirty = false;
+    entry.draw.apply(null, [entry.canvas].concat(entry.args));
+    entry.width = entry.canvas.parentNode.clientWidth;
+    entry.height = entry.canvas.parentNode.clientHeight;
+  }
+
+  function responsiveChart(draw) {
+    return function (canvas) {
+      if (!canvas || !canvas.parentNode || !canvas.isConnected) return;
+      const parent = canvas.parentNode;
+      const entry = { canvas: canvas, draw: draw, args: Array.prototype.slice.call(arguments, 1), width: 0, height: 0 };
+      chartEntries.set(parent, entry);
+      paintChart(entry);
+      if (chartObserver) chartObserver.observe(parent);
+    };
+  }
+
+  function refreshView(root) {
+    if (!root) return;
+    observeReveal(root);
+    requestAnimationFrame(function () {
+      chartEntries.forEach(function (entry) {
+        if (root.contains(entry.canvas)) paintChart(entry);
+      });
+    });
+  }
+
   /**
    * 创建元素
    * @param {string} tag 标签名，支持 'div.cls#id'
@@ -91,6 +170,7 @@
 
   function clear(node) {
     if (!node) return node;
+    releaseVisuals(node);
     while (node.firstChild) node.removeChild(node.firstChild);
     return node;
   }
@@ -385,6 +465,8 @@
     );
 
     return new Promise(function (resolve) {
+      const previousFocus = document.activeElement;
+      const titleId = uid('confirm-title');
       const overlay = el('div', {
         style: {
           position: 'fixed',
@@ -399,16 +481,19 @@
       });
 
       const box = el(
-        'div.card',
+        'div.card.confirm-dialog',
         {
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-labelledby': titleId,
           style: {
             maxWidth: '430px',
             width: '100%',
-            animation: 'toastIn 280ms cubic-bezier(0.34, 1.56, 0.64, 1)',
           },
         },
         [
           el('h3', {
+            id: titleId,
             text: opts.title,
             style: { fontSize: '17px', marginBottom: '12px' },
           }),
@@ -431,12 +516,17 @@
       function close(result) {
         document.removeEventListener('keydown', onKey);
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (previousFocus && previousFocus.isConnected) previousFocus.focus();
         resolve(result);
       }
 
       function onKey(e) {
         if (e.key === 'Escape') close(false);
-        if (e.key === 'Enter') close(true);
+        if (e.key === 'Tab') {
+          const buttons = box.querySelectorAll('button');
+          if (e.shiftKey && document.activeElement === buttons[0]) { e.preventDefault(); buttons[buttons.length - 1].focus(); }
+          else if (!e.shiftKey && document.activeElement === buttons[buttons.length - 1]) { e.preventDefault(); buttons[0].focus(); }
+        }
       }
 
       overlay.addEventListener('click', function (e) {
@@ -460,6 +550,7 @@
    */
   function animateCount(node, target, opts) {
     if (!node) return Promise.resolve();
+    if (countJobs.has(node)) countJobs.get(node)();
     const options = Object.assign(
       { duration: 1200, digits: 2, prefix: null, suffix: '', compact: false },
       opts || {}
@@ -477,33 +568,35 @@
     node.dataset.value = String(to);
 
     // 尊重减少动效偏好
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || options.duration <= 0) {
-      node.textContent = options.prefix + formatNumber(to, options.digits) + options.suffix;
+    function format(value) {
+      return options.prefix + (options.compact && Math.abs(value) >= 10000
+        ? formatMoney(value, { symbol: '', digits: 2, compact: true }).trim()
+        : formatNumber(value, options.digits)) + options.suffix;
+    }
+    if (motionPreference.matches || options.duration <= 0) {
+      node.textContent = format(to);
       return Promise.resolve();
     }
 
     return new Promise(function (resolve) {
       const startTime = performance.now();
+      let frame = null;
+      countJobs.set(node, function () { cancelAnimationFrame(frame); countJobs.delete(node); resolve(); });
 
       function step(now) {
-        const progress = clamp((now - startTime) / options.duration, 0, 1);
+        const finish = !node.isConnected || document.hidden || node.closest('.page-view[hidden]') || motionPreference.matches;
+        const progress = finish ? 1 : clamp((now - startTime) / options.duration, 0, 1);
         // easeOutExpo，收尾更顺滑
         const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
         const current = from + (to - from) * eased;
 
-        if (options.compact && Math.abs(current) >= 10000) {
-          node.textContent =
-            options.prefix + formatMoney(current, { symbol: '', digits: 2, compact: true }).trim() + options.suffix;
-        } else {
-          node.textContent =
-            options.prefix + formatNumber(current, options.digits) + options.suffix;
-        }
+        node.textContent = format(current);
 
-        if (progress < 1) window.requestAnimationFrame(step);
-        else resolve();
+        if (progress < 1) frame = window.requestAnimationFrame(step);
+        else { countJobs.delete(node); resolve(); }
       }
 
-      window.requestAnimationFrame(step);
+      frame = window.requestAnimationFrame(step);
     });
   }
 
@@ -526,12 +619,13 @@
    */
   function typewriter(node, text, opts) {
     if (!node) return Promise.resolve();
+    if (textJobs.has(node)) textJobs.get(node)();
     const options = Object.assign({ speed: 18, cursor: true }, opts || {});
     const content = String(text || '');
 
     clear(node);
 
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (motionPreference.matches || !content) {
       node.textContent = content;
       return Promise.resolve();
     }
@@ -546,18 +640,25 @@
     }
 
     return new Promise(function (resolve) {
-      let index = 0;
-      const timer = window.setInterval(function () {
-        // 保证换行不被吃掉
-        index += 1;
+      const startedAt = performance.now();
+      const duration = Math.min(5000, content.length * Math.max(1, options.speed));
+      let frame = null;
+      function finish() {
+        cancelAnimationFrame(frame);
+        textSpan.textContent = content;
+        if (cursor && cursor.parentNode) cursor.remove();
+        textJobs.delete(node);
+        resolve();
+      }
+      textJobs.set(node, finish);
+      function step(now) {
+        if (!node.isConnected || document.hidden || node.closest('.page-view[hidden]') || motionPreference.matches) { finish(); return; }
+        const index = Math.ceil(content.length * Math.min(1, (now - startedAt) / duration));
         textSpan.textContent = content.slice(0, index);
-
-        if (index >= content.length) {
-          window.clearInterval(timer);
-          if (cursor && cursor.parentNode) cursor.parentNode.removeChild(cursor);
-          resolve();
-        }
-      }, options.speed);
+        if (index >= content.length) finish();
+        else frame = requestAnimationFrame(step);
+      }
+      frame = requestAnimationFrame(step);
     });
   }
 
@@ -566,7 +667,7 @@
   function setupCanvas(canvas) {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
-    const width = Math.max(rect.width || canvas.parentNode.clientWidth || 320, 200);
+    const width = Math.max(canvas.parentNode.clientWidth || rect.width || 320, 1);
     const height = canvas.parentNode.clientHeight || 280;
 
     canvas.width = Math.floor(width * dpr);
@@ -658,9 +759,11 @@
     // X 轴标签
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const labelStep = Math.ceil(labels.length / 8);
+    const labelCount = Math.max(2, Math.floor(plotW / 64));
+    const labelStep = Math.max(1, Math.ceil((labels.length - 1) / (labelCount - 1)));
     labels.forEach(function (label, i) {
       if (i % labelStep !== 0 && i !== labels.length - 1) return;
+      if (i !== labels.length - 1 && i !== 0 && labels.length - 1 - i < labelStep * .75) return;
       ctx.fillText(String(label), xAt(i), padding.top + plotH + 11);
     });
 
@@ -1002,16 +1105,17 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillStyle = cssVar('--text-secondary', '#94a3b8');
-      ctx.fillText(truncate(col.label, 6), x + barW / 2, plotBottom + 12);
+      ctx.fillText(truncate(col.label, slot < 60 ? 4 : 6), x + barW / 2, plotBottom + 12, slot - 3);
 
       // 数值
       ctx.fillStyle = color;
       ctx.textBaseline = 'bottom';
+      const moneyOptions = slot < 85 ? { symbol: '', digits: 0, compact: true } : { digits: 0 };
       const text =
         col.kind === 'total'
-          ? formatMoney(col.to, { digits: 0 })
-          : (col.delta >= 0 ? '+' : '') + formatMoney(col.delta, { digits: 0 });
-      ctx.fillText(text, x + barW / 2, yTop - 5);
+          ? formatMoney(col.to, moneyOptions)
+          : (col.delta >= 0 ? '+' : '') + formatMoney(col.delta, moneyOptions);
+      ctx.fillText(text, x + barW / 2, yTop - 5, Math.max(16, slot - 3));
 
       // 连接虚线
       if (i < columns.length - 1) {
@@ -1090,12 +1194,14 @@
     animateCount: animateCount,
     animateCounts: animateCounts,
     typewriter: typewriter,
+    observeReveal: observeReveal,
+    refreshView: refreshView,
 
     cssVar: cssVar,
     hexToRgba: hexToRgba,
-    drawLineChart: drawLineChart,
-    drawBarChart: drawBarChart,
-    drawDonutChart: drawDonutChart,
-    drawWaterfallChart: drawWaterfallChart,
+    drawLineChart: responsiveChart(drawLineChart),
+    drawBarChart: responsiveChart(drawBarChart),
+    drawDonutChart: responsiveChart(drawDonutChart),
+    drawWaterfallChart: responsiveChart(drawWaterfallChart),
   };
 })();

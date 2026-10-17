@@ -7,21 +7,17 @@
   <title>流萤 Firefly · 财报总结优化</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>" />
   <link rel="stylesheet" href="./css/main.css" />
+  <link rel="stylesheet" href="./css/workspace.css" />
 </head>
 <body>
+  <a class="skip-link" href="#app-main">跳至主要内容</a>
   <!-- 萤火粒子背景 -->
   <canvas id="firefly-canvas" aria-hidden="true"></canvas>
   <div class="aurora" aria-hidden="true"></div>
 
-  <!-- ================= 顶栏 ================= -->
-  <header class="site-header">
-    <!-- 类名与 index/css/main.css 保持一致：外层 .site-header 负责
-         吸顶+毛玻璃，内层 .nav 是唯一的 flex 行（高 68px），
-         品牌 / 导航 / 操作区都是它的直接子元素。
-         早期这里用了 .topbar / .topbar-inner，而 CSS 里根本没有这两个
-         选择器，导致整条顶栏完全没样式、操作区被挤到第二行。 -->
-    <div class="container">
-      <div class="nav">
+  <!-- ================= 统一工作区侧栏 ================= -->
+  <aside class="site-sidebar" id="workspace-sidebar" aria-label="工作区侧栏">
+      <div class="sidebar-brand-row">
         <a class="brand" href="#dashboard">
           <div class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 48 48" width="30" height="30">
@@ -44,7 +40,20 @@
           </div>
         </a>
 
+        <button class="btn-icon sidebar-collapse" id="sidebar-collapse" type="button" aria-label="收起侧栏" aria-expanded="true" aria-controls="workspace-sidebar" title="收起侧栏">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m7-11-3 3 3 3"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-section-label">工作空间 <span>WORKSPACE</span></div>
+      <nav class="sidebar-nav" aria-label="主导航">
         <ul class="nav-links" id="nav-links"><!-- 由 app.js 填充 --></ul>
+      </nav>
+      <div class="sidebar-note">
+        <span class="sidebar-note-spark" aria-hidden="true">✧</span>
+        <strong>让每一笔账，都有回响。</strong>
+        <p>从日常记录，到更清晰的经营洞察。</p>
+        <a href="#assistant">与流萤聊聊 <span aria-hidden="true">↗</span></a>
+      </div>
 
         <div class="nav-actions">
           <div class="status-dot" id="mode-badge" hidden>
@@ -55,16 +64,26 @@
                  不要再塞一个真实的 span.dot —— 那样会画出两个圆点。 -->
             <span class="status-label">检测中</span>
           </div>
-          <button class="btn-icon" id="bot-toggle" title="协议端状态" aria-label="查看协议端状态">🤖</button>
-          <button class="btn-icon" id="particle-toggle" title="萤火粒子背景" aria-label="切换粒子背景">✨</button>
-          <button class="btn-icon" id="theme-toggle" title="切换主题" aria-label="切换主题">☀️</button>
+          <div class="sidebar-tools">
+            <button class="btn-icon" id="bot-toggle" type="button" title="协议端状态" aria-label="查看协议端状态"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="4"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8M2 11v5m20-5v5" stroke-linecap="round"/></svg></button>
+            <button class="btn-icon" id="particle-toggle" type="button" title="萤火粒子背景" aria-label="切换粒子背景">✧</button>
+            <button class="btn-icon" id="theme-toggle" type="button" title="切换主题" aria-label="切换主题">☼</button>
+          </div>
         </div>
-      </div>
+  </aside>
+  <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="关闭导航" tabindex="-1" hidden></button>
+
+  <div class="workspace-shell">
+  <header class="workspace-bar">
+    <div class="workspace-context">
+      <button class="btn-icon mobile-menu" id="sidebar-open" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="workspace-sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+      <span class="workspace-label">工作空间</span><span class="breadcrumb-separator" aria-hidden="true">/</span><span id="workspace-page">财务总览</span>
     </div>
+    <div class="workspace-date" id="workspace-date"></div>
   </header>
 
   <!-- ================= 主体 ================= -->
-  <main id="app-main">
+  <main id="app-main" tabindex="-1">
     <!-- 占位：首屏骨架，被首个视图替换 -->
     <div class="page-view" id="view-boot">
       <div class="container">
@@ -80,18 +99,19 @@
   </main>
 
   <!-- ================= 页脚 ================= -->
-  <footer class="footer">
-    <div class="footer-inner">
+  <footer class="footer site-footer">
+    <div class="container footer-inner">
       <div class="footer-brand">
         <span class="firefly-dot"></span>
         <span id="footer-app-name">流萤 Firefly</span>
         <span id="footer-version" class="footer-version">v1.0.0</span>
       </div>
       <div class="footer-note">
-        数据仅供参考，不构成专业税务意见 · 交互快捷键 <kbd>Alt</kbd>+<kbd>1</kbd>~<kbd>6</kbd>
+        数据仅供参考，不构成专业税务意见 · 快捷键 <kbd>Alt</kbd>+<kbd>1</kbd>~<kbd>7</kbd>
       </div>
     </div>
   </footer>
+  </div>
 
   <!-- 全局组件挂载点 -->
   <div id="toast-root" class="toast-root" aria-live="polite"></div>

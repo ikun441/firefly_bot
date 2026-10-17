@@ -26,7 +26,6 @@
     customDays: 30,
     payload: null,
     reportId: null,
-    generating: false,
     reports: [],
     isMock: false,
   };
@@ -96,7 +95,7 @@
         html: '⚡ 生成报告',
         on: {
           click: function () {
-            generate();
+            generate(container);
           },
         },
       });
@@ -232,22 +231,22 @@
       container._buttons = { generateBtn, imageBtn, pushBtn, printBtn };
 
       /* ---- 首次进入自动生成 ---- */
-      await generate();
+      await generate(container);
     },
   };
 
   /* ============================================================
      生成报告
      ============================================================ */
-  async function generate() {
-    const stage = document.querySelector('.report-stage');
-    if (!stage || state.generating) return;
-
-    const buttons = document.querySelectorAll('.card.no-print .btn');
-    const generateBtn = buttons[0];
-
-    state.generating = true;
-    if (generateBtn) generateBtn.classList.add('is-loading');
+  async function generate(container) {
+    const stage = container && container._stage;
+    if (!stage || !container.isConnected || container._generating) return;
+    const generateBtn = container._buttons.generateBtn;
+    const period = state.period;
+    const customDays = state.customDays;
+    container._generating = true;
+    generateBtn.disabled = true;
+    generateBtn.classList.add('is-loading');
 
     FF.clear(stage);
     const scan = renderScanning();
@@ -258,14 +257,14 @@
     // 动画与请求并行
     const requestPromise = withFallback(
       function () {
-        return api.generateReport({ period: state.period, custom_days: state.customDays });
+        return api.generateReport({ period: period, custom_days: customDays });
       },
       async function () {
         // mock：模拟生成耗时
         await FF.sleep(1400);
         const payload = Mock.buildReportPayload();
-        payload.period = state.period;
-        const range = FF.periodRange(state.period, new Date(), state.customDays);
+        payload.period = period;
+        const range = FF.periodRange(period, new Date(), customDays);
         payload.period_start = range.start.toISOString();
         payload.period_end = range.end.toISOString();
         payload.title = FF.formatDate(range.start, 'MM-DD') + ' ~ ' + FF.formatDate(range.end, 'MM-DD') + ' 财务税务分析报告';
@@ -286,8 +285,10 @@
       await animationPromise.catch(function () {});
     }
 
-    state.generating = false;
-    if (generateBtn) generateBtn.classList.remove('is-loading');
+    container._generating = false;
+    generateBtn.disabled = false;
+    generateBtn.classList.remove('is-loading');
+    if (!container.isConnected) return;
 
     if (error) {
       FF.clear(stage);
@@ -302,7 +303,7 @@
               style: { marginTop: '8px' },
               on: {
                 click: function () {
-                  generate();
+                  generate(container);
                 },
               },
             }),
@@ -329,14 +330,11 @@
 
     // 启用按钮
     ['imageBtn', 'pushBtn', 'printBtn'].forEach(function (key) {
-      const container = document.querySelector('.report-stage');
-      if (!container) return;
+      container._buttons[key].disabled = false;
     });
-    const allButtons = document.querySelectorAll('.card.no-print .btn');
-    for (let i = 1; i < allButtons.length; i++) allButtons[i].disabled = false;
 
     const elapsed = Math.round(performance.now() - startedAt);
-    FF.toast('报告生成完成，用时 ' + elapsed + 'ms', 'success');
+    if (!container.closest('[hidden]')) FF.toast('报告生成完成，用时 ' + elapsed + 'ms', 'success');
   }
 
   /* ============================================================
@@ -364,11 +362,17 @@
   }
 
   function runScanAnimation(scan) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      scan.steps.forEach(function (step) { step.node.classList.add('is-done'); });
+      scan.barFill.style.width = '100%';
+      return Promise.resolve();
+    }
     return new Promise(function (resolve) {
       const total = scan.steps.length;
       let index = 0;
 
       function next() {
+        if (!scan.node.isConnected || scan.node.closest('[hidden]')) { resolve(); return; }
         if (index > 0) {
           scan.steps[index - 1].node.classList.remove('is-active');
           scan.steps[index - 1].node.classList.add('is-done');
@@ -727,9 +731,9 @@
       });
     });
 
-    // 综述打字机（进入视口后触发）
+    // 综述完整呈现，便于阅读与打印
     if (summaryNode) {
-      setupTypewriter(summaryNode, payload.summary_text || '暂无综述内容。');
+      renderSummary(summaryNode, payload.summary_text || '暂无综述内容。');
     }
 
     utils.observeReveal(root);
@@ -923,38 +927,12 @@
   }
 
   /* ============================================================
-     打字机（进入视口后开始）
+     综述阅读区
      ============================================================ */
-  function setupTypewriter(node, text) {
-    let started = false;
-
-    function start() {
-      if (started) return;
-      started = true;
-      FF.typewriter(node, text, { speed: 12, cursor: false });
-    }
-
-    if (!('IntersectionObserver' in window)) {
-      start();
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            start();
-            observer.disconnect();
-          }
-        });
-      },
-      { threshold: 0.2 }
-    );
-
-    observer.observe(node);
-
-    // 兜底：5 秒后无论如何都显示
-    window.setTimeout(start, 5000);
+  function renderSummary(node, text) {
+    // A report is a reading surface: show the full summary immediately instead
+    // of keeping an observer and a five-second fallback timer for hidden pages.
+    node.textContent = text;
   }
 
   /* ============================================================

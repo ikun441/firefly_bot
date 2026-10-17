@@ -11,18 +11,31 @@
   const el = FF.el;
   const Views = window.FFViews;
   const api = window.FFApi.api;
+  const mobileSidebar = window.matchMedia('(max-width: 760px)');
+  const NAV_ICONS = {
+    dashboard: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+    collector: '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15zM13 20h7"/>',
+    ledger: '<path d="M5 4h13a2 2 0 0 1 2 2v15H6a3 3 0 0 1-3-3V6a2 2 0 0 1 2-2Zm-2 14a3 3 0 0 1 3-3h14M8 8h7"/>',
+    report: '<path d="M5 3h10l4 4v14H5zM14 3v5h5M9 12h6M9 16h6"/>',
+    assistant: '<path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4zM20 3v4m-2-2h4"/>',
+    budget: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="m12 12 6-6"/>',
+    settings: '<path d="m10 3-.6 2.3-2 .9-2.1-.6-2 3.4L5 11v2l-1.7 2 2 3.4 2.1-.6 2 .9L10 21h4l.6-2.3 2-.9 2.1.6 2-3.4-1.7-2v-2l1.7-2-2-3.4-2.1.6-2-.9L14 3z"/><circle cx="12" cy="12" r="3"/>',
+  };
+  function navIcon(key) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + NAV_ICONS[key] + '</svg>';
+  }
 
   /* ============================================================
      路由表
      ============================================================ */
   const ROUTES = [
-    { key: 'dashboard', hash: '#dashboard', label: '总览', icon: '🌌', view: 'dashboard' },
-    { key: 'collector', hash: '#collector', label: '记账', icon: '✒️', view: 'collector' },
-    { key: 'ledger', hash: '#ledger', label: '账本', icon: '📚', view: 'ledger' },
-    { key: 'report', hash: '#report', label: '报告', icon: '📊', view: 'report' },
-    { key: 'assistant', hash: '#assistant', label: '助手', icon: '🔮', view: 'assistant' },
-    { key: 'budget', hash: '#budget', label: '预算', icon: '🎯', view: 'budget' },
-    { key: 'settings', hash: '#settings', label: '设置', icon: '⚙️', view: 'settings' },
+    { key: 'dashboard', hash: '#dashboard', label: '财务总览', view: 'dashboard' },
+    { key: 'collector', hash: '#collector', label: '流水记账', view: 'collector' },
+    { key: 'ledger', hash: '#ledger', label: '账本管理', view: 'ledger' },
+    { key: 'report', hash: '#report', label: '周期报告', view: 'report' },
+    { key: 'assistant', hash: '#assistant', label: 'AI 助手', view: 'assistant' },
+    { key: 'budget', hash: '#budget', label: '预算管理', view: 'budget' },
+    { key: 'settings', hash: '#settings', label: '系统设置', view: 'settings' },
   ];
 
   const router = {
@@ -58,29 +71,108 @@
 
     FF.clear(list);
 
-    ROUTES.forEach(function (route) {
-      const link = el('button.nav-link', {
+    ROUTES.forEach(function (route, i) {
+      const link = el('a.nav-link', {
+        href: route.hash,
+        title: route.label + ' · Alt+' + (i + 1),
+        'aria-label': route.label,
+        'aria-keyshortcuts': 'Alt+' + (i + 1),
         dataset: { key: route.key },
-        html: '<span style="margin-right:6px">' + route.icon + '</span>' + route.label,
+        html: navIcon(route.key) + '<span class="nav-link-label">' + route.label + '</span><span class="nav-shortcut" aria-hidden="true">' + String(i + 1).padStart(2, '0') + '</span>',
         on: {
-          click: function () {
+          click: function (event) {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
             router.go(route.key);
           },
         },
       });
-      list.appendChild(el('li', {}, [link]));
+      list.appendChild(el('li', { class: route.key === 'settings' ? 'nav-settings' : '' }, [link]));
     });
   }
 
   function markActive(key) {
     FF.$$('.nav-link').forEach(function (link) {
       link.classList.toggle('is-active', link.dataset.key === key);
+      if (link.dataset.key === key) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
     });
 
     const route = ROUTES.filter(function (r) {
       return r.key === key;
     })[0];
-    if (route) document.title = route.label + ' · 流萤 Firefly';
+    if (route) {
+      document.title = route.label + ' · 流萤 Firefly';
+      FF.$('#workspace-page').textContent = route.label;
+    }
+  }
+
+  /* Sidebar state is independent of the page, including its mobile focus trap. */
+  let closeSidebar = function () {};
+  function setupSidebar() {
+    const sidebar = FF.$('#workspace-sidebar');
+    const opener = FF.$('#sidebar-open');
+    const toggle = FF.$('#sidebar-collapse');
+    const backdrop = FF.$('#sidebar-backdrop');
+    FF.$('.skip-link').addEventListener('click', function (event) {
+      event.preventDefault();
+      FF.$('#app-main').focus({ preventScroll: true });
+    });
+    let previousFocus = null;
+    let isOpen = false;
+    const stored = localStorage.getItem('firefly-sidebar');
+    if (stored === 'collapsed') document.documentElement.dataset.sidebar = stored;
+
+    function sync() {
+      const mobile = mobileSidebar.matches;
+      sidebar.inert = mobile && !isOpen;
+      FF.$('.workspace-shell').inert = mobile && isOpen;
+      if (mobile && isOpen) {
+        sidebar.setAttribute('role', 'dialog');
+        sidebar.setAttribute('aria-modal', 'true');
+      } else {
+        sidebar.removeAttribute('role');
+        sidebar.removeAttribute('aria-modal');
+      }
+      backdrop.hidden = !mobile || !isOpen;
+      document.body.classList.toggle('sidebar-is-open', mobile && isOpen);
+      const expanded = mobile ? isOpen : document.documentElement.dataset.sidebar !== 'collapsed';
+      toggle.setAttribute('aria-expanded', String(expanded));
+      opener.setAttribute('aria-expanded', String(mobile && isOpen));
+      toggle.title = toggle.ariaLabel = mobile ? '关闭导航' : expanded ? '收起侧栏' : '展开侧栏';
+    }
+    closeSidebar = function (restoreFocus) {
+      isOpen = false;
+      sync();
+      if (restoreFocus && previousFocus) previousFocus.focus();
+    };
+    opener.addEventListener('click', function () {
+      previousFocus = document.activeElement;
+      isOpen = true;
+      sync();
+      toggle.focus();
+    });
+    toggle.addEventListener('click', function () {
+      if (mobileSidebar.matches) return closeSidebar(true);
+      const next = document.documentElement.dataset.sidebar === 'collapsed' ? 'expanded' : 'collapsed';
+      document.documentElement.dataset.sidebar = next;
+      localStorage.setItem('firefly-sidebar', next);
+      sync();
+    });
+    backdrop.addEventListener('click', function () { closeSidebar(true); });
+    sidebar.addEventListener('keydown', function (event) {
+      if (!mobileSidebar.matches || !isOpen) return;
+      if (event.key === 'Escape') { event.preventDefault(); closeSidebar(true); }
+      if (event.key !== 'Tab') return;
+      const focusable = FF.$$('a[href], button:not(:disabled)', sidebar).filter(function (node) { return node.getClientRects().length; });
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    mobileSidebar.addEventListener('change', function () { closeSidebar(false); });
+    FF.$('#workspace-date').textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+    sync();
   }
 
   /* ============================================================
@@ -90,7 +182,10 @@
     const route = ROUTES.filter(function (r) {
       return r.key === key;
     })[0];
-    if (!route) return;
+    if (!route) { router.go('dashboard'); return; }
+    const wasMobileOpen = mobileSidebar.matches && document.body.classList.contains('sidebar-is-open');
+    closeSidebar(false);
+    if (wasMobileOpen) FF.$('#app-main').focus({ preventScroll: true });
 
     // 卸载旧视图
     FF.$$('.page-view').forEach(function (node) {
@@ -138,18 +233,31 @@
 
     // 仅首次渲染（避免重复请求）；记账页每次都刷新以保证数据新鲜
     if (container.dataset.rendered === '1' && key !== 'collector' && key !== 'report') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      FF.refreshView(viewNode);
+      window.scrollTo({ top: 0, behavior: 'instant' });
       return;
     }
 
+    // Use a fresh mount per render. An older in-flight request can only update
+    // its detached node, never overwrite the latest route or theme refresh.
+    const mount = el('div');
     FF.clear(container);
+    container.appendChild(mount);
     container.dataset.rendered = '1';
 
     try {
-      await view.render(container);
+      const dispose = await view.render(mount);
+      if (!mount.isConnected || router.currentKey !== key) {
+        if (typeof dispose === 'function') dispose();
+        return;
+      }
+      if (typeof dispose === 'function') router.destroy = dispose;
+      FF.refreshView(viewNode);
     } catch (err) {
-      FF.clear(container);
-      container.appendChild(
+      if (!mount.isConnected) return;
+      FF.clear(mount);
+      container.dataset.rendered = '0';
+      mount.appendChild(
         el('div.card', {}, [
           el('div.empty', {}, [
             el('div.empty-icon', { text: '💥' }),
@@ -170,7 +278,7 @@
       );
     }
 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (router.currentKey === key) window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
   /* ============================================================
@@ -237,6 +345,9 @@
     }
 
     updateModeBadge(!!info.debug);
+    const savedTheme = localStorage.getItem('firefly-theme');
+    if (savedTheme === 'firefly-dark' || savedTheme === 'firefly-light') document.documentElement.dataset.theme = savedTheme;
+    syncThemeControl();
   }
 
   /** 应用登录后的完整元信息（/api/meta）。 */
@@ -265,11 +376,12 @@
 
     // 主题
     if (meta.ui) {
-      if (meta.ui.theme) document.documentElement.dataset.theme = meta.ui.theme;
+      if (meta.ui.theme && !localStorage.getItem('firefly-theme')) document.documentElement.dataset.theme = meta.ui.theme;
       if (meta.ui.particle_enabled === false && window.FireflyParticles) {
         window.FireflyParticles.disable();
       }
     }
+    syncThemeControl();
   }
 
   /** 顶栏「演示模式」标记：让使用者一眼看出当前数据是模拟的。 */
@@ -298,29 +410,29 @@
     const saved = window.localStorage.getItem('firefly-theme');
     if (saved) document.documentElement.dataset.theme = saved;
 
-    const updateIcon = function () {
-      const isLight = document.documentElement.dataset.theme === 'firefly-light';
-      btn.textContent = isLight ? '🌙' : '☀️';
-      btn.title = isLight ? '切换到暗色主题' : '切换到亮色主题';
-    };
-
-    updateIcon();
+    syncThemeControl();
 
     btn.addEventListener('click', function () {
       const isLight = document.documentElement.dataset.theme === 'firefly-light';
       const next = isLight ? 'firefly-dark' : 'firefly-light';
       document.documentElement.dataset.theme = next;
       window.localStorage.setItem('firefly-theme', next);
-      updateIcon();
+      syncThemeControl();
       FF.toast('已切换到' + (next === 'firefly-light' ? '亮色' : '暗色') + '主题', 'info', 1600);
 
-      // 重绘当前页图表（颜色依赖 CSS 变量）
-      const key = router.currentKey;
-      router.currentKey = '';
-      const container = document.getElementById('container-' + key);
-      if (container) container.dataset.rendered = '0';
-      render(key);
+      // Repaint cached canvases without refetching or discarding form drafts.
+      FF.refreshView(FF.$('#app-main'));
     });
+  }
+
+  function syncThemeControl() {
+    const btn = FF.$('#theme-toggle');
+    if (!btn) return;
+    const isLight = document.documentElement.dataset.theme === 'firefly-light';
+    btn.textContent = isLight ? '☾' : '☼';
+    btn.title = isLight ? '切换到暗色主题' : '切换到亮色主题';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', String(isLight));
   }
 
   /* ============================================================
@@ -338,8 +450,10 @@
 
     const updateIcon = function () {
       const enabled = window.FireflyParticles && window.FireflyParticles.isEnabled();
-      btn.textContent = enabled ? '✨' : '💤';
+      btn.textContent = enabled ? '✧' : '·';
       btn.title = enabled ? '关闭萤火粒子' : '开启萤火粒子';
+      btn.setAttribute('aria-label', btn.title);
+      btn.setAttribute('aria-pressed', String(!!enabled));
     };
 
     updateIcon();
@@ -358,19 +472,13 @@
      键盘快捷键
      ============================================================ */
   function setupShortcuts() {
-    const map = {
-      Digit1: 'dashboard',
-      Digit2: 'collector',
-      Digit3: 'report',
-      Digit4: 'assistant',
-      Digit5: 'budget',
-      Digit6: 'settings',
-    };
+    const map = {};
+    ROUTES.forEach(function (route, i) { map['Digit' + (i + 1)] = route.key; });
 
     document.addEventListener('keydown', function (e) {
       // 输入框内不触发
       const tag = (e.target.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
       if (e.altKey && map[e.code]) {
         e.preventDefault();
@@ -393,7 +501,7 @@
 
   /** 清空所有视图的渲染缓存并立刻重渲染当前页。 */
   function forceRerender() {
-    document.querySelectorAll('.view').forEach(function (node) {
+    document.querySelectorAll('.page-view > .container').forEach(function (node) {
       node.dataset.rendered = '0';
     });
     render(validInitialRoute());
@@ -441,6 +549,7 @@
 
   async function boot() {
     buildNav();
+    setupSidebar();
     setupThemeToggle();
     setupParticleToggle();
     setupShortcuts();

@@ -111,10 +111,18 @@
   Views.dashboard = {
     async render(container) {
       container.appendChild(
-        el('div.page-head', {}, [
-          el('h1.page-title', {}, [el('span', { text: '🌌' }), el('span', { text: '财务总览' })]),
-          el('p.page-subtitle', {
-            text: '一屏掌握经营状况、风险与优化方向。数据随记账实时更新。',
+        el('section.overview-hero', { 'aria-label': '财务总览' }, [
+          el('div.overview-eyebrow', { text: 'FIREFLY · FINANCIAL WORKSPACE' }),
+          el('h1', { text: '每一笔记录，都让经营更清晰。' }),
+          el('p', { text: '收支、预算与风险，在这里一目了然。让流萤陪你看见数字背后的方向。' }),
+          el('div.overview-actions', {}, [
+            el('a.btn.btn-primary', { href: '#collector', html: '<span aria-hidden="true">＋</span> 记一笔流水' }),
+            el('a.btn.btn-ghost', { href: '#report', html: '查看周期报告 <span aria-hidden="true">↗</span>' }),
+          ]),
+          el('div.overview-orbit', { 'aria-hidden': 'true', html:
+            '<svg viewBox="0 0 240 240" fill="none"><circle cx="120" cy="120" r="83" stroke="currentColor" stroke-opacity=".1"/><circle cx="120" cy="120" r="60" stroke="currentColor" stroke-opacity=".1" stroke-dasharray="2 7"/>' +
+            '<g class="orbit-track"><ellipse cx="120" cy="120" rx="103" ry="37" transform="rotate(-35 120 120)" stroke="currentColor" stroke-opacity=".38"/><circle cx="200" cy="72" r="4" fill="currentColor"/><circle cx="53" cy="166" r="2" fill="currentColor"/></g>' +
+            '<circle class="orbit-core" cx="120" cy="120" r="29" fill="currentColor" fill-opacity=".06" stroke="currentColor" stroke-opacity=".25"/><path d="m120 103 4.5 12.5L137 120l-12.5 4.5L120 137l-4.5-12.5L103 120l12.5-4.5z" fill="currentColor" fill-opacity=".7"/><text x="88" y="221">FIREFLY</text></svg>'
           }),
         ])
       );
@@ -552,32 +560,7 @@
 
   /* 滚动渐显 */
   function observeReveal(root) {
-    const targets = FF.$$('.reveal', root);
-    if (!targets.length) return;
-
-    if (!('IntersectionObserver' in window)) {
-      targets.forEach(function (t) {
-        t.classList.add('is-visible');
-      });
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('is-visible');
-            observer.unobserve(entry.target);
-          }
-        });
-      },
-      { threshold: 0.08, rootMargin: '0px 0px -40px 0px' }
-    );
-
-    targets.forEach(function (t, i) {
-      t.style.transitionDelay = Math.min(i * 60, 300) + 'ms';
-      observer.observe(t);
-    });
+    FF.observeReveal(root);
   }
 
   /* ============================================================

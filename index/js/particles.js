@@ -16,9 +16,9 @@
 
   /* ------------------------------------------------------------ 配置 */
   const CFG = {
-    density: 0.00009, // 每平方像素的粒子数
-    maxParticles: 110, // 上限，避免大屏卡顿
-    minParticles: 26,
+    density: 0.000045, // 每平方像素的粒子数
+    maxParticles: 64, // 上限，避免大屏卡顿
+    minParticles: 16,
     baseRadius: [0.9, 2.6],
     baseSpeed: 0.28, // 像素/帧（约 17px/s）
     linkDistance: 132, // 连线阈值
@@ -34,7 +34,22 @@
     ],
   };
 
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let enabled = localStorage.getItem('firefly-particles') !== 'off';
+  let lastFrame = 0;
+  // Cache five glow textures instead of creating radial gradients every frame.
+  const glows = CFG.palette.map(function (color) {
+    const sprite = document.createElement('canvas');
+    sprite.width = sprite.height = 64;
+    const brush = sprite.getContext('2d');
+    const gradient = brush.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gradient.addColorStop(0, 'rgba(' + color.join(',') + ',.65)');
+    gradient.addColorStop(.45, 'rgba(' + color.join(',') + ',.14)');
+    gradient.addColorStop(1, 'rgba(' + color.join(',') + ',0)');
+    brush.fillStyle = gradient;
+    brush.fillRect(0, 0, 64, 64);
+    return sprite;
+  });
 
   let particles = [];
   let width = 0;
@@ -55,6 +70,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     buildParticles();
+    if (enabled) draw();
   }
 
   /* ------------------------------------------------------------ 粒子构建 */
@@ -63,7 +79,8 @@
   }
 
   function makeParticle() {
-    const color = CFG.palette[Math.floor(Math.random() * CFG.palette.length)];
+    const colorIndex = Math.floor(Math.random() * CFG.palette.length);
+    const color = CFG.palette[colorIndex];
     const radius = rand(CFG.baseRadius[0], CFG.baseRadius[1]);
     const angle = rand(0, Math.PI * 2);
     const speed = CFG.baseSpeed * rand(0.35, 1.25);
@@ -75,10 +92,11 @@
       vy: Math.sin(angle) * speed,
       radius,
       color,
+      colorIndex,
       // 明灭相位与速率，模拟萤火虫闪烁
       phase: rand(0, Math.PI * 2),
       phaseSpeed: rand(0.008, 0.026),
-      alpha: 0,
+      alpha: .4,
       // 漂移扰动
       wobble: rand(0, Math.PI * 2),
       wobbleSpeed: rand(0.004, 0.012),
@@ -88,21 +106,21 @@
   function buildParticles() {
     const target = Math.max(
       CFG.minParticles,
-      Math.min(CFG.maxParticles, Math.floor(width * height * CFG.density))
+      Math.min(width < 760 ? 26 : CFG.maxParticles, Math.floor(width * height * CFG.density))
     );
     particles = [];
     for (let i = 0; i < target; i++) particles.push(makeParticle());
   }
 
   /* ------------------------------------------------------------ 更新 */
-  function update() {
+  function update(delta) {
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
 
       // 飘浮漂移
-      p.wobble += p.wobbleSpeed;
-      p.x += p.vx + Math.cos(p.wobble) * 0.16;
-      p.y += p.vy + Math.sin(p.wobble * 0.7) * 0.11;
+      p.wobble += p.wobbleSpeed * delta;
+      p.x += (p.vx + Math.cos(p.wobble) * 0.16) * delta;
+      p.y += (p.vy + Math.sin(p.wobble * 0.7) * 0.11) * delta;
 
       // 边界回绕（留出余量避免边缘突现）
       const margin = 24;
@@ -120,13 +138,13 @@
         if (dist2 < range * range && dist2 > 0.01) {
           const dist = Math.sqrt(dist2);
           const force = (1 - dist / range) * 0.5;
-          p.x += (dx / dist) * force;
-          p.y += (dy / dist) * force;
+          p.x += (dx / dist) * force * delta;
+          p.y += (dy / dist) * force * delta;
         }
       }
 
       // 明灭
-      p.phase += p.phaseSpeed;
+      p.phase += p.phaseSpeed * delta;
       p.alpha = 0.34 + Math.sin(p.phase) * 0.3;
     }
   }
@@ -166,14 +184,10 @@
       const alpha = Math.max(0, Math.min(1, p.alpha));
 
       if (CFG.glow) {
-        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius * 5.2);
-        g.addColorStop(0, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (alpha * 0.5).toFixed(3) + ')');
-        g.addColorStop(0.45, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (alpha * 0.14).toFixed(3) + ')');
-        g.addColorStop(1, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius * 5.2, 0, Math.PI * 2);
-        ctx.fill();
+        const size = p.radius * 10.4;
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(glows[p.colorIndex], p.x - size / 2, p.y - size / 2, size, size);
+        ctx.globalAlpha = 1;
       }
 
       ctx.fillStyle =
@@ -185,16 +199,22 @@
   }
 
   /* ------------------------------------------------------------ 主循环 */
-  function loop() {
-    update();
-    draw();
+  function loop(now) {
+    if (!running) return;
+    const interval = width < 760 ? 1000 / 24 : 1000 / 30;
+    if (!lastFrame || now - lastFrame >= interval) {
+      update(Math.min(lastFrame ? now - lastFrame : interval, 64) / (1000 / 60));
+      draw();
+      lastFrame = now;
+    }
     rafId = window.requestAnimationFrame(loop);
   }
 
   function start() {
-    if (running) return;
+    if (running || !enabled || document.hidden || motionPreference.matches) return;
     running = true;
-    loop();
+    lastFrame = 0;
+    rafId = window.requestAnimationFrame(loop);
   }
 
   function stop() {
@@ -223,17 +243,19 @@
   });
 
   /* ------------------------------------------------------------ 外部控制 */
-  let enabled = true;
 
   const FireflyParticles = {
     enable: function () {
       enabled = true;
+      document.documentElement.dataset.particles = 'on';
       canvas.style.display = '';
-      if (!running) start();
+      draw();
+      start();
     },
     disable: function () {
       enabled = false;
       stop();
+      document.documentElement.dataset.particles = 'off';
       canvas.style.display = 'none';
     },
     toggle: function () {
@@ -258,11 +280,10 @@
 
   resize();
 
-  if (prefersReducedMotion) {
-    // 尊重系统偏好：只静态绘制一帧
-    draw();
-    enabled = false;
-  } else {
-    start();
-  }
+  motionPreference.addEventListener('change', function () {
+    stop();
+    if (enabled) { draw(); start(); }
+  });
+  if (enabled) FireflyParticles.enable();
+  else FireflyParticles.disable();
 })();
