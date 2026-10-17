@@ -38,12 +38,12 @@ def _as_int(value: Union[int, str, None]) -> Optional[int]:
 
 
 class NaturalIn(BaseModel):
-    text: str = Field(..., min_length=1, description="自然语言描述，例如「昨天打车 38」")
+    text: str = Field(..., min_length=1, max_length=4000, description="自然语言描述，例如「昨天打车 38」")
     auto_create: bool = Field(default=False, description="是否直接入库（否则返回待确认卡片）")
 
 class ChatIn(BaseModel):
-    question: str = Field(..., min_length=1)
-    history: List[Dict[str, str]] = []
+    question: str = Field(..., min_length=1, max_length=4000)
+    history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
 class ClassifyIn(BaseModel):
@@ -57,7 +57,7 @@ class NLItemIn(BaseModel):
     # 处理 —— 那里是 **continue（跳过该条）**，不是报错。
     # 若写成 Field(gt=0)，一条负数会把整批 NL 确认变成 422 全失败，
     # 而用户本意只是其中一条有问题，其余本该正常落库。
-    amount: float = Field(..., le=MAX_AMOUNT)
+    amount: float = Field(..., le=MAX_AMOUNT, allow_inf_nan=False)
     direction: str = Field(default="expense")
     category: Optional[str] = None
     # 同理用 Union[int, str]：前端在「识别出的类别名匹配不到已有类别」时
@@ -74,10 +74,11 @@ class NLItemIn(BaseModel):
     counterparty: Optional[str] = None
     memo: Optional[str] = None
     confidence: Optional[float] = None
+    has_invoice: bool = False
 
 
 class NLConfirmIn(BaseModel):
-    items: List[NLItemIn] = Field(default_factory=list)
+    items: List[NLItemIn] = Field(default_factory=list, max_length=100)
 
 
 @router.get("/ai/status")
@@ -109,7 +110,7 @@ async def natural_language(
     from ..ai.natural import extract_transactions
 
     categories = await ledger_service.list_categories(session, user_id=user.id)
-    category_names = [c.name for c in categories if c.direction.value == "expense"]
+    category_names = [c.name for c in categories]
 
     result = await extract_transactions(payload.text, categories=category_names)
 
@@ -117,10 +118,9 @@ async def natural_language(
         return fail(result.get("message") or "解析失败", detail=result)
 
     items = result.get("items", [])
+    for item in items:
+        item["category_id"] = next((c.id for c in categories if c.name == item.get("category") and c.direction == item.get("direction")), None)
     created: List[Dict[str, Any]] = []
-
-    # 建立类别名 → id 映射
-    name_to_id = {c.name: c.id for c in categories}
 
     if payload.auto_create:
         for item in items:
@@ -136,7 +136,7 @@ async def natural_language(
                 user_id=user.id,
                 amount=float(item.get("amount", 0)),
                 direction=direction,
-                category_id=name_to_id.get(item.get("category", "")),
+                category_id=item.get("category_id"),
                 trade_time=item.get("trade_time"),
                 counterparty=item.get("counterparty"),
                 memo=item.get("memo"),
@@ -144,8 +144,10 @@ async def natural_language(
                 source=TransactionSource.NATURAL_LANGUAGE,
                 confidence=item.get("confidence"),
                 is_confirmed=True,
+                has_invoice=item.get("has_invoice", False),
             )
             created.append(to_dict(txn))
+            await audit_service.log_action(session, "create_transaction", user_id=user.id, target_type="transaction", target_id=txn.id, channel="web", detail="自然语言自动入账", extra={"after": to_dict(txn)})
 
     await audit_service.log_action(
         session,
@@ -188,28 +190,31 @@ async def nl_confirm(
         return fail("没有需要入账的条目")
 
     categories = await ledger_service.list_categories(session, user_id=user.id)
-    name_to_id = {c.name: c.id for c in categories if c.name}
     id_set = {c.id for c in categories}
 
-    created: List[Dict[str, Any]] = []
+    from ..services.transaction_validation import validate_references
+    resolved = []
     for item in payload.items:
-        if not item.amount or item.amount <= 0:
+        if item.amount <= 0:
             continue
-
-        # 优先用前端传来的 category_id；没有则按类别名反查。
-        # 必须先 _as_int 归一化：前端传的是 select 的字符串值（或空串），
-        # 直接拿去做 `in id_set`（集合里是 int）永远为 False，
-        # 用户的类别选择会被静默丢弃、全部记成未分类。
+        if item.direction not in ("expense", "income"):
+            return fail("无效的收支方向")
         category_id = _as_int(item.category_id)
-        if category_id not in id_set:
-            category_id = None
+        if item.category_id not in (None, "") and category_id not in id_set:
+            return fail("类别不存在或无权使用")
         if category_id is None and item.category:
-            category_id = name_to_id.get(item.category)
+            category_id = next((c.id for c in categories if c.name == item.category and c.direction == item.direction), None)
+        account_id = _as_int(item.account_id)
+        if item.account_id not in (None, "") and account_id is None:
+            return fail("无效的账本编号")
+        try:
+            await validate_references(session, user_id=user.id, category_id=category_id, account_id=account_id, direction=item.direction)
+        except ValueError as exc:
+            return fail(str(exc))
+        resolved.append((item, category_id, account_id, parse_dt(item.trade_time)))
 
-        trade_time = None
-        if item.trade_time:
-            trade_time = parse_dt(item.trade_time)
-
+    created: List[Dict[str, Any]] = []
+    for item, category_id, account_id, trade_time in resolved:
         txn = await ledger_service.create_transaction(
             session,
             user_id=user.id,
@@ -220,7 +225,7 @@ async def nl_confirm(
                 else TransactionDirection.INCOME
             ),
             category_id=category_id,
-            account_id=_as_int(item.account_id),
+            account_id=account_id,
             trade_time=trade_time,
             counterparty=item.counterparty or "",
             memo=item.memo or "",
@@ -228,8 +233,10 @@ async def nl_confirm(
             source=TransactionSource.NATURAL_LANGUAGE,
             confidence=item.confidence,
             is_confirmed=True,
+            has_invoice=item.has_invoice,
         )
         created.append(to_dict(txn))
+        await audit_service.log_action(session, "create_transaction", user_id=user.id, target_type="transaction", target_id=txn.id, channel="web", detail="自然语言确认入账", extra={"after": to_dict(txn)})
 
     await audit_service.log_action(
         session,
@@ -238,7 +245,7 @@ async def nl_confirm(
         target_type="transaction",
         operator="user",
         detail=f"确认入账 {len(created)} 条",
-        extra={"count": len(created)},
+        extra={"count": len(created), "after": created},
         channel="web",
     )
 

@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import re
+import math
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from ..config import get_config
@@ -116,13 +118,13 @@ def _extract_amount(text: str) -> Optional[float]:
     优先匹配带货币单位的数字，避免把「昨天」抽成天数、把「3 号」抽成金额。
     """
     # 1) 带单位
-    match = re.search(r"(\d+(?:\.\d{1,2})?)\s*(?:元|块|块钱|圆|RMB|rmb|¥|￥)", text)
+    match = re.search(r"(?<![.\d])(-?\d+(?:\.\d+)?)\s*(?:元|块|块钱|圆|RMB|rmb|¥|￥)", text)
     if match:
         return float(match.group(1))
 
     # 2) 排除日期/时间/数量词后取最后一个独立数字
     cleaned = re.sub(r"\d+\s*(?:月|日|号|点|时|分|人|个|份|次|天|周|年)", " ", text)
-    numbers = re.findall(r"(?<![.\d])(\d+(?:\.\d{1,2})?)(?![.\d])", cleaned)
+    numbers = re.findall(r"(?<![.\d])(-?\d+(?:\.\d+)?)(?![.\d])", cleaned)
     if numbers:
         return float(numbers[-1])
 
@@ -164,7 +166,7 @@ def _chinese_amount(text: str) -> Optional[float]:
 
 def _extract_time(text: str, reference: Optional[datetime] = None) -> Optional[datetime]:
     """把相对时间表达折算成绝对时间。"""
-    now = reference or datetime.now()
+    now = reference or datetime.now(ZoneInfo(get_config().app.timezone)).replace(tzinfo=None)
 
     # 相对日
     for word, offset in RELATIVE_DAYS.items():
@@ -264,7 +266,10 @@ def rule_extract(text: str, reference: Optional[datetime] = None) -> List[Dict[s
         if amount is None or amount <= 0:
             continue
 
-        trade_time = _extract_time(segment, reference)
+        try:
+            trade_time = _extract_time(segment, reference)
+        except ValueError:
+            continue
         category = _guess_category(segment)
         direction = _guess_direction(segment)
 
@@ -274,7 +279,7 @@ def rule_extract(text: str, reference: Optional[datetime] = None) -> List[Dict[s
 
         items.append(
             {
-                "amount": round(amount, 2),
+                "amount": amount,
                 "direction": direction,
                 "category": category,
                 "trade_time": trade_time,
@@ -282,6 +287,7 @@ def rule_extract(text: str, reference: Optional[datetime] = None) -> List[Dict[s
                 "memo": memo,
                 "confidence": 0.62,
                 "source": "rule",
+                "has_invoice": bool(re.search(r"(有发票|已开票|已开具|有票)", segment)) and not bool(re.search(r"(没有发票|未开票|无票|无发票)", segment)),
             }
         )
 
@@ -302,6 +308,7 @@ SYSTEM_PROMPT = """你是一个中文记账信息抽取引擎。请从用户的�
 5. category 从给定类别列表中选择最贴近的一个；没有合适的就填 null。
 6. confidence 是你对这条抽取结果的置信度，范围 0 到 1。
 7. 一句话里可能包含多条记录（用逗号、顿号、句号分隔），请全部抽出来。
+8. has_invoice 是布尔值；明确已有发票/已开票才填 true，未提及或无票填 false。
 
 输出格式：
 {"items": [{"amount": 38, "direction": "expense", "category": "交通", "trade_time": "2025-03-14T12:00:00", "counterparty": null, "memo": "打车", "confidence": 0.95}]}"""
@@ -323,7 +330,7 @@ async def extract_transactions(
 
     config = get_config()
     category_hint = "、".join(categories or []) or "（无预设类别，可填 null）"
-    now = reference or datetime.now()
+    now = reference or datetime.now(ZoneInfo(get_config().app.timezone)).replace(tzinfo=None)
 
     if config.llm.enabled and is_ready():
         user_prompt = (
@@ -340,7 +347,7 @@ async def extract_transactions(
                 temperature=0.0,
             )
 
-            items = _normalize_items(result.get("items", []), text)
+            items = _normalize_items(result.get("items", []) if isinstance(result, dict) else [], text)
             if items:
                 return {
                     "success": True,
@@ -380,11 +387,11 @@ def _normalize_items(raw_items: Any, source_text: str) -> List[Dict[str, Any]]:
             continue
 
         try:
-            amount = abs(float(raw.get("amount", 0)))
+            amount = float(raw.get("amount", 0))
         except (TypeError, ValueError):
             continue
 
-        if amount <= 0:
+        if not math.isfinite(amount) or amount <= 0 or amount > 100_000_000:
             continue
 
         direction = str(raw.get("direction", "expense")).lower()
@@ -399,7 +406,7 @@ def _normalize_items(raw_items: Any, source_text: str) -> List[Dict[str, Any]]:
             except ValueError:
                 parsed_time = _extract_time(trade_time)
         if parsed_time is None:
-            parsed_time = _extract_time(source_text) or datetime.now()
+            parsed_time = _extract_time(source_text) or datetime.now(ZoneInfo(get_config().app.timezone))
 
         try:
             confidence = float(raw.get("confidence", 0.85))
@@ -410,16 +417,32 @@ def _normalize_items(raw_items: Any, source_text: str) -> List[Dict[str, Any]]:
             {
                 "amount": round(amount, 2),
                 "direction": direction,
-                "category": raw.get("category") or None,
+                "category": str(raw.get("category"))[:64] if raw.get("category") else None,
                 "trade_time": parsed_time,
-                "counterparty": raw.get("counterparty") or None,
-                "memo": (raw.get("memo") or source_text)[:200],
+                "counterparty": str(raw.get("counterparty") or "")[:128],
+                "memo": str(raw.get("memo") or source_text)[:200],
                 "confidence": max(0.0, min(1.0, confidence)),
                 "source": "llm",
+                "has_invoice": raw.get("has_invoice") is True,
             }
         )
 
     return items
 
 
-__all__ = ["extract_transactions", "rule_extract"]
+async def refine_transactions(text, previous, feedback, categories):
+    """Explicit AI retry after rejection; never silently reuse the rejected rule result."""
+    import json
+    if not is_ready():
+        raise LLMNotReadyError("AI 未配置，未写入任何流水；请配置后重试或回复取消。")
+    result = await chat_json([
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps({"current_time": datetime.now(ZoneInfo(get_config().app.timezone)).isoformat(), "original": text, "rejected_items": previous, "corrections": feedback, "categories": categories}, ensure_ascii=False, default=str)},
+    ], temperature=0.0, use_cache=False)
+    items = _normalize_items(result.get("items", []) if isinstance(result, dict) else [], text)
+    if not items or len(items) > 100:
+        raise ValueError("AI 未返回有效的结构化流水，请补充金额和用途后重试。")
+    return items
+
+
+__all__ = ["extract_transactions", "rule_extract", "refine_transactions"]

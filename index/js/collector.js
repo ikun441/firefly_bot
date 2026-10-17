@@ -249,7 +249,7 @@
       const initialCategory =
         item.category_id ||
         (state.categories.filter(function (c) {
-          return c.name === item.category_name;
+          return c.name === (item.category || item.category_name) && c.direction === (item.direction || 'expense');
         })[0] || {}).id ||
         '';
 
@@ -264,6 +264,7 @@
         trade_time: item.trade_time || new Date().toISOString(),
         counterparty: item.counterparty || '',
         confidence: confidence,
+        has_invoice: item.has_invoice === true,
         selected: true,
       };
 
@@ -280,6 +281,7 @@
       });
 
       const categorySelect = el('select.select');
+      categorySelect.appendChild(el('option', { value: '', text: '未分类', selected: !entry.category_id }));
       state.categories
         .filter(function (c) {
           return c.direction === entry.direction;
@@ -289,6 +291,8 @@
             el('option', { value: c.id, text: (c.icon || '') + ' ' + c.name, selected: String(c.id) === String(entry.category_id) })
           );
         });
+      categorySelect.value = String(entry.category_id || '');
+      entry.category_id = toId(categorySelect.value);
       categorySelect.addEventListener('change', function () {
         // select.value 永远是字符串，而后端 id 是数字。
         // 这里转回数字，否则后续 c.id === entry.category_id 永远为 false，
@@ -341,6 +345,8 @@
       memoInput.addEventListener('input', function () {
         entry.memo = memoInput.value;
       });
+      const invoiceCheckbox = el('input', { type: 'checkbox', checked: entry.has_invoice });
+      invoiceCheckbox.addEventListener('change', function () { entry.has_invoice = invoiceCheckbox.checked; });
 
       const row = el('div.budget-item', {}, [
         el('div', { style: { display: 'flex', gap: '13px', alignItems: 'flex-start' } }, [
@@ -374,6 +380,7 @@
             el('div.field-hint', {
               text: '时间：' + FF.formatDate(entry.trade_time, 'YYYY-MM-DD HH:mm'),
             }),
+            el('label.field-label', { style: { marginTop: '12px' } }, [invoiceCheckbox, el('span', { text: '已开票 / 有发票' })]),
             item.remark
               ? el('div.check-suggestion', { text: item.remark, style: { marginTop: '9px' } })
               : null,
@@ -402,6 +409,7 @@
           }
 
           confirmBtn.classList.add('is-loading');
+          confirmBtn.disabled = true;
 
           try {
             const payload = selected.map(function (i) {
@@ -418,6 +426,7 @@
                 counterparty: i.counterparty,
                 source: 'natural_language',
                 confidence: i.confidence,
+                has_invoice: i.has_invoice,
                 is_confirmed: true,
               };
             });
@@ -463,6 +472,7 @@
             FF.toast('入账失败：' + (err.message || '未知错误'), 'error');
           } finally {
             confirmBtn.classList.remove('is-loading');
+            confirmBtn.disabled = false;
           }
         },
       },
@@ -1189,9 +1199,7 @@
 
   async function refreshLedger() {
     const utils = window.FFViewUtils;
-    state.transactions = utils.store.transactions.length
-      ? utils.store.transactions.slice()
-      : await utils.loadTransactions(60);
+    state.transactions = await utils.loadTransactions(60);
 
     // 填充台账类别筛选
     const selects = document.querySelectorAll('.card select.select');

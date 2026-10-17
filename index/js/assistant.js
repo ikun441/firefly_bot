@@ -140,7 +140,7 @@
       try {
         const result = await withFallback(
           function () {
-            return api.ask(question);
+            return api.ask(question, state.messages.slice(-6));
           },
           function () {
             return Object.assign({}, Mock.ASK_RESPONSE, { question: question });
@@ -149,6 +149,8 @@
 
         loadingNode.remove();
         appendMessage(messageList, 'assistant', result.data, result.mock);
+        state.messages.push({ role: 'user', content: question }, { role: 'assistant', content: result.data.answer || '' });
+        state.messages = state.messages.slice(-12);
       } catch (err) {
         loadingNode.remove();
         appendMessage(messageList, 'assistant', {

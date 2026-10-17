@@ -28,6 +28,21 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class BotDraft(SQLModel, table=True):
+    """Persistent, conversation-bound proposal; accepting writes transactions atomically."""
+    __tablename__ = "ff_bot_draft"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_key: str = Field(index=True, unique=True, max_length=64)
+    user_id: int = Field(foreign_key="ff_user.id", index=True)
+    original: str = Field(default="", sa_column=Column(Text))
+    items: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    feedback: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    engine: str = Field(default="rule", max_length=16)
+    state: str = Field(default="pending", max_length=24)
+    revision: int = Field(default=1)
+    expires_at: datetime = Field(default_factory=_now_utc)
+
+
 class TransactionDirection(str, Enum):
     """收支方向"""
 
@@ -506,6 +521,7 @@ class SystemState(SQLModel, table=True):
 
 
 __all__ = [
+    "BotDraft",
     "TransactionDirection",
     "TransactionSource",
     "TaxpayerType",

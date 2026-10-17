@@ -391,8 +391,8 @@
     anomalies: function (query) {
       return request('/anomalies', { query: query, timeout: 30000 });
     },
-    ask: function (question) {
-      return request('/ai/chat', { method: 'POST', body: { question: question }, timeout: 60000 });
+    ask: function (question, history) {
+      return request('/ai/chat', { method: 'POST', body: { question: question, history: history || [] }, timeout: 180000 });
     },
     suggestions: function (query) {
       return request('/audit/suggestions', { query: query });

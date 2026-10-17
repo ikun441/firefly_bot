@@ -35,7 +35,7 @@
       } catch (error) { message.textContent = '版本信息读取失败：' + error.message; pull.disabled=true; }
     }
     refresh();
-    return el('section.card', { id:'system-version-card' }, [el('div.card-header', {}, [el('h2.card-title', {text:'版本与仓库更新'}), el('span.tag',{text:'v1.0.1'})]),version,message,el('div.btn-group',{style:{marginTop:'18px'}},[el('button.btn',{text:'刷新版本状态',type:'button',on:{click:refresh}}),pull]),el('p.field-hint',{text:'从官方仓库 main 更新。配置备份保存在 data/updates；依赖有变化时，重启请使用 start.cmd / start.sh。',style:{marginTop:'12px'}})]);
+    return el('section.card', { id:'system-version-card' }, [el('div.card-header', {}, [el('h2.card-title', {text:'版本与仓库更新'}), el('span.tag',{text:'v1.0.2'})]),version,message,el('div.btn-group',{style:{marginTop:'18px'}},[el('button.btn',{text:'刷新版本状态',type:'button',on:{click:refresh}}),pull]),el('p.field-hint',{text:'从官方仓库 main 更新。配置备份保存在 data/updates；依赖有变化时，重启请使用 start.cmd / start.sh。',style:{marginTop:'12px'}})]);
   }
   window.FFSystem = { buildCard:buildCard, update:update };
   document.addEventListener('DOMContentLoaded', function () { const button=document.getElementById('repository-update');if(button)button.addEventListener('click',update); });

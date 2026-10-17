@@ -15,6 +15,7 @@
   const NAV_ICONS = {
     dashboard: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
     collector: '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15zM13 20h7"/>',
+    transactions: '<path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/>',
     excel: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M10 9v12m4-16v2m-7 7 3 4m0-4-3 4"/>',
     ledger: '<path d="M5 4h13a2 2 0 0 1 2 2v15H6a3 3 0 0 1-3-3V6a2 2 0 0 1 2-2Zm-2 14a3 3 0 0 1 3-3h14M8 8h7"/>',
     report: '<path d="M5 3h10l4 4v14H5zM14 3v5h5M9 12h6M9 16h6"/>',
@@ -32,6 +33,7 @@
   const ROUTES = [
     { key: 'dashboard', hash: '#dashboard', label: '财务总览', view: 'dashboard' },
     { key: 'collector', hash: '#collector', label: '流水记账', view: 'collector' },
+    { key: 'transactions', hash: '#transactions', label: '流水管理', view: 'transactions' },
     { key: 'excel', hash: '#excel', label: 'Excel 导入', view: 'excel' },
     { key: 'ledger', hash: '#ledger', label: '账本管理', view: 'ledger' },
     { key: 'report', hash: '#report', label: '周期报告', view: 'report' },
@@ -234,7 +236,7 @@
     }
 
     // 仅首次渲染（避免重复请求）；记账页每次都刷新以保证数据新鲜
-    if (container.dataset.rendered === '1' && key !== 'collector' && key !== 'report' && key !== 'excel') {
+    if (container.dataset.rendered === '1' && key !== 'collector' && key !== 'report' && key !== 'excel' && key !== 'transactions') {
       FF.refreshView(viewNode);
       window.scrollTo({ top: 0, behavior: 'instant' });
       return;
@@ -569,7 +571,14 @@
     // 用户登录成功后界面停在骨架屏，看起来像「登录没生效」。
     // 监听器是纯声明，提前注册没有副作用。
     setupAuthListeners();
+    ['firefly:transaction-created', 'firefly:transactions-changed'].forEach(function (name) {
+      window.addEventListener(name, function () {
+        if (window.FFStore) window.FFStore.transactions = [];
+        FF.$$('.page-view > .container').forEach(function (node) { if (node.id !== 'container-' + router.currentKey) node.dataset.rendered = '0'; });
+      });
+    });
     window.addEventListener('firefly:import-completed', function () {
+      if (window.FFStore) window.FFStore.transactions = [];
       FF.$$('.page-view > .container').forEach(function (node) { if (node.id !== 'container-excel') node.dataset.rendered = '0'; });
     });
 

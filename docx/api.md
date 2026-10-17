@@ -1,6 +1,6 @@
 # 流萤 Firefly · API 接口文档
 
-> 当前版本：v1.0.1。本文档描述业务接口的调用规范、参数约定与注意事项。
+> 当前版本：v1.0.2。本文档描述业务接口的调用规范、参数约定与注意事项。
 > 交互式文档（Swagger UI）：`http://127.0.0.1:2525/docs`
 > OpenAPI 描述：`http://127.0.0.1:2525/api/openapi.json`
 
@@ -209,7 +209,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:2525/api/stats
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/audit/stats` | 建议采纳率统计（论文指标来源） |
-| GET | `/api/audit/logs` | 操作日志；可按 `action` / `channel` 过滤 |
+| GET | `/api/audit/logs` | 操作日志；可按 `action` / `channel` / `target_type` / `target_id` 过滤 |
 | GET | `/api/audit/suggestions` | 建议列表；可按 `state` / `kind` 过滤 |
 | POST | `/api/audit/suggestions/{id}/resolve` | 标记建议为已采纳 / 已拒绝 |
 
@@ -499,3 +499,49 @@ summary_text / payload`。`summary_text` 是可直接发到聊天窗口的纯文
 成功返回 `updated / running_version / installed_version / commit / restart_required / dependencies_changed / config_backup / message`；已经最新时 `updated:false`。
 
 bootstrap、meta、health 的 version 与运行代码一致，OpenAPI info.version 也同步。
+
+
+## 7. v1.0.2：自然语言确认、只读 AI 与流水管理
+
+### 7.1 自然语言结果与开票
+
+`POST /api/ai/natural` 默认只解析，`data.items` 同时返回 `category` 名称和按方向匹配的 `category_id`。
+前端确认卡片允许修改类别、金额、账本、备注及 `has_invoice`（布尔，默认 false）。
+
+```json
+{"items":[{"amount":38,"direction":"expense","category_id":"1","account_id":"1","trade_time":"2026-10-17T12:30:00+08:00","memo":"打车","has_invoice":true}]}
+```
+
+上述数据提交到 `POST /api/ai/nl-confirm`。每批最多 100 条；空 ID 归一化为空，类别名兜底匹配方向；禁止跨用户账本或类别、方向与类别冲突。
+有效条目先整批验证再落库，返回 `created` 中保留 `has_invoice`、`category_id`、`account_id`。历史兼容：非正金额条目跳过；非有限值和超上限金额拒绝。
+`auto_create:true` 是已有网页 API 的显式直写选项，不适用于 QQ 流程；默认 false。
+
+### 7.2 AI 只读工具约定
+
+`POST /api/ai/chat` 请求 `question`（1–4000 字）及可选 `history`（最多 20 条，使用最近 6 条）。
+服务端只接受 intent / period / direction / category / top_n / custom_days；模型提供的 user_id、SQL、写入指令不会执行。
+可用 intent：`sum_by_category`、`sum_total`、`top_categories`、`count_transactions`、`list_transactions`、`compare_period`、`budget_status`、`tax_status`、`account_balance`、`financial_overview`。
+`top_n` 限 1–10、自定义周期限 1–366 天；明细最多最近 10 条，读取始终按当前用户隔离。
+
+响应保留 `answer` / `intent` / `data` / `chart` / `plan` / `engine`，新增 `tools` 和 `analysis_engine`。
+`engine` 表示意图规划来源，`analysis_engine` 为 `llm` 或 `rule`。先执行真实计算，再把只读结果交给模型分析；模型失败时保留真实计算答案，并返回 `analysis_note`。
+模型上下文不包含配置、密钥或其他用户账目；返回的数据中的备注与名称不作为工具指令执行。
+
+### 7.3 流水管理及操作日志
+
+- `GET /api/transactions` 新增可选整数 `account_id` 筛选，其他筛选与 limit / offset 同时生效，total 与列表口径一致。
+- `POST /api/transactions` 保留新增入口；`PATCH /api/transactions/{id}` 修改流水，`DELETE` 删除，`GET .../{id}` 查询详情。
+- PATCH 中 `category_id:null` 或 `account_id:null` 明确清空归属；未传的字段保持原值。方向与类别必须匹配，引用需属于当前用户。
+- 交易时间接收 ISO 8601，统一保存为 UTC；响应时间含时区信息。
+- `GET /api/audit/logs?target_type=transaction&target_id=123` 可按流水查看操作日志；省略 target_id 查看全部流水操作。
+- 创建日志 extra.after 保存快照；修改日志 extra.before / extra.after / extra.fields 保存变更；删除日志 extra.before 保留原内容。日志与数据修改同事务保存。
+
+### 7.4 QQ 确认状态机（OneBot 消息入口）
+
+自然语言记账与 `/记` 先用规则引擎生成离线结果，只保存 `ff_bot_draft`，不创建流水。
+回复「接受 / 确认 / 确认入账 / 同意 / 是 / 确认记账」接受当前预览；「取消 / 取消记账 / 放弃」结束；其余回复作为修改意见交给模型，产生新结构化预览后继续等待接受。
+AI 失败或无有效条目进入 needs_revision，不能接受旧的被拒结果。多轮反馈最多保留最近 10 轮上下文，每轮待确认有效期 15 分钟。
+草稿按机器人 + 会话 + 发送者哈希绑定，数据库持久化；接受使用状态 / revision 条件更新，重复和并发确认只入账一次。
+
+私聊无需 @；群聊需要 @ 机器人。管理员（SUPERUSERS）及私聊推送目标在私聊映射到 local，其余用户和群聊使用独立平台用户，所有查询、报告和记账命令采用同一映射。
+含「查询 / 明细 / 多少 / 统计」等的数字问题进入只读查询，避免把「最近 10 笔」误记作 10 元。

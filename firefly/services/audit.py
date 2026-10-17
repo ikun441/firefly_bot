@@ -218,6 +218,8 @@ async def list_audit_logs(
     channel: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    target_type: Optional[str] = None,
+    target_id: Optional[int] = None,
 ) -> List[AuditLog]:
     """分页查询审计日志。
 
@@ -225,6 +227,10 @@ async def list_audit_logs(
     答辩演示「谁录的账、从哪录的」时需要这个维度。
     """
     stmt = select(AuditLog)
+    if target_type:
+        stmt = stmt.where(AuditLog.target_type == target_type)
+    if target_id is not None:
+        stmt = stmt.where(AuditLog.target_id == target_id)
     if user_id is not None:
         stmt = stmt.where(AuditLog.user_id == user_id)
     if action:
@@ -242,9 +248,15 @@ async def count_audit_logs(
     user_id: Optional[int] = None,
     action: Optional[str] = None,
     channel: Optional[str] = None,
+    target_type: Optional[str] = None,
+    target_id: Optional[int] = None,
 ) -> int:
     """统计审计日志条数"""
     stmt = select(func.count(AuditLog.id))
+    if target_type:
+        stmt = stmt.where(AuditLog.target_type == target_type)
+    if target_id is not None:
+        stmt = stmt.where(AuditLog.target_id == target_id)
     if user_id is not None:
         stmt = stmt.where(AuditLog.user_id == user_id)
     if action:

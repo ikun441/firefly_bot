@@ -9,12 +9,9 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Optional
 
 from nonebot import on_command, on_message, on_startswith
-from nonebot.adapters.onebot.v11 import Bot, Event, Message
-from nonebot.rule import to_me
+from nonebot.adapters.onebot.v11 import Bot, Event, Message, MessageSegment, PrivateMessageEvent
 
 logger = logging.getLogger("firefly.plugin")
 
@@ -22,10 +19,11 @@ HELP_TEXT = """✨ 流萤 · 财务财税助手
 
 📝 记账
   直接对我说：昨天打车 38，请客户吃饭 260
-  /记 餐饲 38 请客户吃饭
+  /记 餐饮 38 请客户吃饭
+  首轮离线解析后回复「接受」入账；「不接受 + 修改意见」交给 AI 重解析；「取消」放弃。
 
 📊 查询
-  上月餐饲花了多少？
+  上月餐饮花了多少？
   这个月一共花了多少？
   我的净资产是多少？
 
@@ -46,142 +44,46 @@ HELP_TEXT = """✨ 流萤 · 财务财税助手
 # 自然语言入口
 # ------------------------------------------------------------------------------
 
-record = on_message(rule=to_me(), priority=20, block=False)
+async def _addressed(event: Event) -> bool:
+    return isinstance(event, PrivateMessageEvent) or bool(getattr(event, "to_me", False))
+
+
+def _text(value):
+    return Message(MessageSegment.text(value))
+
+
+async def _event_user(session, event):
+    from ..api.deps import get_or_create_user
+    from ..services.bot_conversation import platform_id_for_event
+    return await get_or_create_user(session, platform_id=platform_id_for_event(event))
+
+
+record = on_message(rule=_addressed, priority=20, block=True)
 
 
 @record.handle()
 async def _handle_message(bot: Bot, event: Event) -> None:
-    """把用户说的话交给意图规划器：记账 / 查询 / 不懂。"""
     from ..ai.assistant import answer_question
-    from ..ai.natural import extract_transactions
     from ..db.session import session_scope
-    from ..services import ledger as ledger_service
-    from ..api.deps import get_or_create_user
-
+    from ..services import bot_conversation, audit
     text = event.get_plaintext().strip()
     if not text or text.startswith("/"):
         return
-
-    # 先判断是不是在记账：带金额的句子交给抽取器。
-    # 注意不能拿 rule_plan 的 intent 来判断 —— rule_plan 是为「查询」设计的，
-    # 记账句里的类别词（打车/吃饭/咖啡…）会命中 CATEGORY_KEYWORDS，
-    # 返回 sum_by_category 而非 unknown，导致 looks_like_record 恒为 False，
-    # 记账句被当成查询、永远不落库。
-    # 因此这里只看「是否含金额数字」，交给 extract_transactions 去抽取；
-    # 抽取不出金额再回退成查询。
-    looks_like_record = bool(re.search(r"\d", text))
-
     async with session_scope() as session:
-        user = await get_or_create_user(session)
-        await ledger_service.ensure_default_categories(session, user_id=user.id)
-        categories = [
-            item.name
-            for item in await ledger_service.list_categories(session, user_id=user.id)
-        ]
-
-        if looks_like_record:
-            extracted = await extract_transactions(text, categories=categories)
-            if extracted["success"]:
-                lines = await _persist_items(session, user.id, extracted["items"])
-                engine_label = "AI" if extracted["engine"] == "llm" else "规则"
-                await session.commit()
-                await record.finish(
-                    Message(
-                        f"✅ 已记账（{engine_label}解析）\n" + "\n".join(lines)
-                        + (f"\n\n💬 {extracted['message']}" if extracted.get("message") else "")
-                    )
-                )
-                return
-
-        # 否则当成查询
-        result = await answer_question(session, user_id=user.id, question=text)
-        await session.commit()
-
-    answer = result.get("answer") or result.get("message") or ""
-    if not answer:
-        answer = "这个问题我还答不上来，试试 /帮助 看看我会什么～"
-    await record.finish(Message(answer))
-
-
-async def _default_account_id(session, user_id: int):
-    """取用户的默认账户 id，供 Bot 记账时自动关联。
-
-    协议端（QQ）没有「选账本」这一步，若不关联账户，Bot 记的账
-    account_id 恒为 None —— 数据虽然落库，但永远不进任何账户余额，
-    前端「账户余额 / 净资产」也不会变。这里兜底到第一个账户。
-    """
-    from ..services import ledger as ledger_service
-
-    await ledger_service.ensure_default_account(session, user_id=user_id)
-    accounts = await ledger_service.list_accounts(session, user_id=user_id)
-    if accounts:
-        return accounts[0].id
-    return None
-
-
-async def _persist_items(session, user_id: str, items) -> list:
-    """把抽取结果落库，返回给用户看的确认行。"""
-    from ..services import ledger as ledger_service
-
-    account_id = await _default_account_id(session, user_id)
-    lines = []
-    for item in items:
-        category = None
-        if item.get("category"):
-            category = await ledger_service.get_category_by_name(
-                session, user_id=user_id, name=item["category"]
-            )
-        if category is None:
-            category = await ledger_service.get_category_by_name(
-                session, user_id=user_id, name="其他支出"
-            )
-
-        txn = await ledger_service.create_transaction(
-            session,
-            user_id=user_id,
-            amount=item.get("amount") or 0,
-            direction=item.get("direction") or "expense",
-            category_id=category.id if category else None,
-            account_id=account_id,
-            trade_time=_parse_time(item.get("trade_time")),
-            counterparty=item.get("counterparty"),
-            memo=item.get("memo"),
-            raw_input=item.get("raw") or "",
-            source="natural_language",
-            confidence=float(item.get("confidence") or 0.0),
-            is_confirmed=True,
-        )
-        sign = "＋" if txn.direction == "income" else "－"
-        memo = f"（{txn.memo}）" if txn.memo else ""
-        lines.append(f"{sign}{txn.amount:.2f} · {category.name if category else '未分类'}{memo}")
-
-    if len(lines) > 1:
-        total = sum(abs(float(item.get("amount") or 0)) for item in items)
-        lines.append(f"共 {len(lines)} 笔，合计 {total:.2f} 元")
-
-    return lines
-
-
-def _parse_time(value: Optional[str]) -> datetime:
-    """解析抽取器给出的时间；失败就用现在。"""
-    if not value:
-        return datetime.now()
-    if isinstance(value, datetime):
-        return value
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%m-%d %H:%M", "%m-%d"):
+        user = await _event_user(session, event)
+        key = bot_conversation.conversation_key(bot.self_id, event.get_session_id(), event.get_user_id())
         try:
-            parsed = datetime.strptime(str(value), fmt)
-            if fmt.startswith("%m"):
-                parsed = parsed.replace(year=datetime.now().year)
-            return parsed
-        except ValueError:
-            continue
-    return datetime.now()
+            reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
+        except ValueError as exc:
+            await session.rollback()
+            reply = f"未入账：{exc}。请取消本轮并重新发送记账内容。"
+        if reply is None:
+            result = await answer_question(session, user_id=user.id, question=text)
+            reply = result.get("answer") or "请使用 /帮助 查看用法。"
+            await audit.log_action(session, "ai_chat", user_id=user.id, target_type="ai", operator="ai", channel="bot", detail=text[:120], extra={"intent": result.get("intent"), "tools": result.get("tools")})
+        await session.commit()
+    await record.finish(_text(reply))
 
-
-# ------------------------------------------------------------------------------
-# 命令：/记 类别 金额 [备注]
-# ------------------------------------------------------------------------------
 
 cmd_record = on_command("记", aliases={"记账", "record"}, priority=5, block=True)
 
@@ -189,57 +91,20 @@ cmd_record = on_command("记", aliases={"记账", "record"}, priority=5, block=T
 @cmd_record.handle()
 async def _cmd_record(bot: Bot, event: Event) -> None:
     from ..db.session import session_scope
-    from ..services import ledger as ledger_service
-    from ..api.deps import get_or_create_user
-
-    parts = [part for part in event.get_plaintext().split() if not part.startswith("/")]
-    if parts and parts[0] in ("记", "记账", "record"):
-        parts = parts[1:]
-    if len(parts) < 2:
-        await cmd_record.finish(Message("用法：/记 类别 金额 [备注]，例如 /记 餐饲 38 请客户吃饭"))
+    from ..services import bot_conversation, ledger
+    text = re.sub(r"^/?(?:记账|record|记)\s*", "", event.get_plaintext().strip(), count=1)
+    if not text:
+        await cmd_record.finish(_text("用法：/记 餐饮 38 请客户吃饭；结果需回复接受后才入账。"))
         return
-
-    category_name = parts[0]
-    amount_match = re.search(r"\d+(?:\.\d+)?", parts[1])
-    if not amount_match:
-        await cmd_record.finish(Message("金额没看懂，请写成数字，例如 /记 餐饲 38"))
-        return
-
-    amount = float(amount_match.group())
-    memo = " ".join(parts[2:]) if len(parts) > 2 else None
-
     async with session_scope() as session:
-        user = await get_or_create_user(session)
-        await ledger_service.ensure_default_categories(session, user_id=user.id)
-        category = await ledger_service.get_category_by_name(
-            session, user_id=user.id, name=category_name
-        )
-        if category is None:
-            category = await ledger_service.get_category_by_name(
-                session, user_id=user.id, name="其他支出"
-            )
-
-        txn = await ledger_service.create_transaction(
-            session,
-            user_id=user.id,
-            amount=amount,
-            direction=category.direction if category else "expense",
-            category_id=category.id if category else None,
-            account_id=await _default_account_id(session, user.id),
-            # 带时区：SQLModel 的 DateTime 拒绝 naive 值
-            trade_time=datetime.now(timezone.utc),
-            memo=memo,
-            raw_input=event.get_plaintext(),
-            source="manual",
-            confidence=1.0,
-            is_confirmed=True,
-        )
+        user = await _event_user(session, event)
+        category = await ledger.get_category_by_name(session, user_id=user.id, name=text.split()[0])
+        if category and category.direction == "income":
+            text = "收入 " + text
+        key = bot_conversation.conversation_key(bot.self_id, event.get_session_id(), event.get_user_id())
+        reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
         await session.commit()
-        display = category.name if category else "未分类"
-
-    await cmd_record.finish(
-        Message(f"✅ 已记账：{display} {txn.amount:.2f} 元" + (f"（{memo}）" if memo else ""))
-    )
+    await cmd_record.finish(_text(reply or "请补充类别和金额。"))
 
 
 # ------------------------------------------------------------------------------
@@ -269,7 +134,7 @@ async def _cmd_report(bot: Bot, event: Event) -> None:
     await cmd_report.send(Message("⏳ 正在生成报告，请稍候…"))
 
     async with session_scope() as session:
-        user = await get_or_create_user(session)
+        user = await _event_user(session, event)
         report = await report_service.generate_report(
             session, user_id=user.id, period=period, persist=True, channel="bot"
         )
@@ -308,7 +173,7 @@ async def _cmd_taxcheck(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session)
+        user = await _event_user(session, event)
         start, end = ledger_service.period_bounds("monthly")
         result = await taxcheck.run_tax_check(session, user_id=user.id, start=start, end=end)
         await session.commit()
@@ -329,7 +194,7 @@ async def _cmd_taxcheck(bot: Bot, event: Event) -> None:
 
     if result.get("disclaimer"):
         lines.append(f"\n{result['disclaimer']}")
-    await cmd_taxcheck.finish(Message("\n".join(lines)))
+    await cmd_taxcheck.finish(_text("\n".join(lines)))
 
 
 # ------------------------------------------------------------------------------
@@ -346,7 +211,7 @@ async def _cmd_list(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session)
+        user = await _event_user(session, event)
         items = await ledger_service.list_transactions(
             session, user_id=user.id, limit=10, order_desc=True
         )
@@ -359,7 +224,7 @@ async def _cmd_list(bot: Bot, event: Event) -> None:
         memo = f" {txn.memo}" if txn.memo else ""
         lines.append(f"{txn.trade_time.strftime('%m-%d %H:%M')} {sign}{txn.amount:.2f}{memo}")
 
-    await cmd_list.finish(Message("\n".join(lines)))
+    await cmd_list.finish(_text("\n".join(lines)))
 
 
 # ------------------------------------------------------------------------------
@@ -377,7 +242,7 @@ async def _cmd_budget(bot: Bot, event: Event) -> None:
     from ..api.deps import get_or_create_user
 
     async with session_scope() as session:
-        user = await get_or_create_user(session)
+        user = await _event_user(session, event)
         start, end = ledger_service.period_bounds("monthly")
         status = await budget_service.get_budget_status(
             session, user_id=user.id, start=start, end=end, period="monthly"
@@ -399,7 +264,7 @@ async def _cmd_budget(bot: Bot, event: Event) -> None:
                 f"{item['name']} {item['usage_ratio'] * 100:.0f}%"
             )
 
-    await cmd_budget.finish(Message("\n".join(lines)))
+    await cmd_budget.finish(_text("\n".join(lines)))
 
 
 # ------------------------------------------------------------------------------

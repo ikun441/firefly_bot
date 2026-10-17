@@ -202,6 +202,9 @@ def to_dict(obj: Any, *, exclude: Optional[set] = None) -> Dict[str, Any]:
         if key.startswith("_") or key in exclude:
             continue
         if hasattr(value, "isoformat"):
+            from datetime import datetime, timezone
+            if isinstance(value, datetime) and value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
             data[key] = value.isoformat()
         else:
             data[key] = value

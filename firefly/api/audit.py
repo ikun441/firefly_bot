@@ -27,15 +27,17 @@ async def list_logs(
     offset: int = Query(default=0, ge=0),
     action: Optional[str] = Query(default=None),
     channel: Optional[str] = Query(default=None),
+    target_type: Optional[str] = Query(default=None),
+    target_id: Optional[int] = Query(default=None),
 ) -> Dict[str, Any]:
     """审计日志（谁在什么时候录了什么、AI 给了什么建议）。"""
     user = await get_or_create_user(session)
 
     logs = await audit_service.list_audit_logs(
-        session, user_id=user.id, limit=limit, offset=offset, action=action, channel=channel
+        session, user_id=user.id, limit=limit, offset=offset, action=action, channel=channel, target_type=target_type, target_id=target_id
     )
     total = await audit_service.count_audit_logs(
-        session, user_id=user.id, action=action, channel=channel
+        session, user_id=user.id, action=action, channel=channel, target_type=target_type, target_id=target_id
     )
 
     return ok([to_dict(log) for log in logs], total=total, limit=limit, offset=offset)

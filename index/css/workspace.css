@@ -301,3 +301,18 @@ kbd { font: inherit; border: 1px solid var(--border); padding: 1px 3px; border-r
 .excel-errors { padding:18px 18px 18px 34px;background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.22);border-radius:14px;color:var(--danger);font-size:12px;line-height:2; }
 .system-version { font-size:15px;font-weight:550;margin:12px 0; }
 @media (min-width:761px) { [data-sidebar='collapsed'] .sidebar-version-row { flex-direction:column;font-size:9px;padding:0; } [data-sidebar='collapsed'] .sidebar-version-row button { font-size:0;width:30px;height:28px; } [data-sidebar='collapsed'] .sidebar-version-row button::after { content:'↓';font-size:14px; } }
+
+/* Transaction management follows the glass workspace and native dialog focus model. */
+.transaction-filters { display:grid; grid-template-columns:2fr repeat(3,1fr); gap:14px; margin-bottom:16px; }
+.transaction-pagination { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:18px; flex-wrap:wrap; }
+.transaction-pagination .field-hint { margin-right:auto; }
+.transaction-memo { max-width:260px; overflow-wrap:anywhere; }
+.transaction-log { border-bottom:1px solid var(--border,rgba(128,150,170,.15)); padding:14px 0; }
+.transaction-log summary { cursor:pointer; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+.transaction-log pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:320px; overflow:auto; font-size:12px; padding:12px; background:rgba(127,140,150,.08); border-radius:12px; }
+.transaction-dialog { background:transparent; border:0; color:var(--text-primary); padding:12px; width:min(760px,96vw); max-height:90dvh; overflow:auto; }
+.transaction-dialog::backdrop { background:rgba(8,12,22,.65); backdrop-filter:blur(8px); }
+.transaction-dialog .card { margin:0; }
+.transaction-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+@media (max-width:900px) { .transaction-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:520px) { .transaction-filters,.transaction-form-grid { grid-template-columns:minmax(0,1fr); } .transaction-dialog { padding:4px; } }

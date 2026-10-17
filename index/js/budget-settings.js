@@ -1249,7 +1249,7 @@
 
   function buildMockSettings() {
     return {
-      app: { name: '流萤 Firefly', subtitle: '财报总结优化 · 财税智能助手', version: '1.0.1', debug: false, timezone: 'Asia/Shanghai' },
+      app: { name: '流萤 Firefly', subtitle: '财报总结优化 · 财税智能助手', version: '1.0.2', debug: false, timezone: 'Asia/Shanghai' },
       server: { host: '127.0.0.1', port: 2525, show_welcome: true },
       database: { url: 'sqlite+aiosqlite:///./data/firefly.db', echo: false },
       ledger: {

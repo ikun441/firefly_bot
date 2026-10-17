@@ -14,6 +14,7 @@ from ..db.session import get_session
 from ..services import anomaly as anomaly_service
 from ..services import audit as audit_service
 from ..services import ledger as ledger_service
+from ..services.transaction_validation import validate_references
 from .deps import MAX_AMOUNT, fail, get_or_create_user, ok, parse_dt, to_dict
 
 router = APIRouter(tags=["transaction"])
@@ -22,7 +23,7 @@ router = APIRouter(tags=["transaction"])
 class TransactionIn(BaseModel):
     # le=MAX_AMOUNT：必须同时卡上界，否则天文数字能一路污染统计与报告，
     # 详见 deps.MAX_AMOUNT 的说明。
-    amount: float = Field(..., gt=0, le=MAX_AMOUNT, description="金额，始终为正数")
+    amount: float = Field(..., gt=0, le=MAX_AMOUNT, allow_inf_nan=False, description="金额，始终为正数")
     direction: str = Field(default="expense", description="expense 支出 / income 收入")
     # 前端传字符串、直接调 API 传数字都要能收，统一转成 int 再入库，
     # 否则 SQLite 里会出现 "1" 与 1 混存的脏数据。
@@ -36,7 +37,7 @@ class TransactionIn(BaseModel):
 
 
 class TransactionPatch(BaseModel):
-    amount: Optional[float] = Field(default=None, gt=0, le=MAX_AMOUNT)
+    amount: Optional[float] = Field(default=None, gt=0, le=MAX_AMOUNT, allow_inf_nan=False)
     direction: Optional[str] = None
     category_id: Optional[Union[int, str]] = None
     account_id: Optional[Union[int, str]] = None
@@ -74,6 +75,7 @@ async def list_transactions(
     only_anomaly: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    account_id: Optional[int] = Query(default=None),
 ) -> Dict[str, Any]:
     """流水列表（按时间倒序）。"""
     user = await get_or_create_user(session)
@@ -90,6 +92,7 @@ async def list_transactions(
         only_anomaly=only_anomaly,
         limit=limit,
         offset=offset,
+        account_id=account_id,
     )
     total = await ledger_service.count_transactions(
         session,
@@ -101,6 +104,7 @@ async def list_transactions(
         keyword=keyword,
         only_pending=only_pending,
         only_anomaly=only_anomaly,
+        account_id=account_id,
     )
 
     # 附带类别信息，避免前端二次查询
@@ -143,9 +147,15 @@ async def create_transaction(
     if not category_id and payload.memo:
         categories = await ledger_service.list_categories(session, user_id=user.id)
         for category in categories:
-            if category.name and category.name in payload.memo:
+            if category.name and category.name in payload.memo and category.direction == direction:
                 category_id = category.id
                 break
+
+    account_id = _as_int(payload.account_id)
+    try:
+        await validate_references(session, user_id=user.id, category_id=category_id, account_id=account_id, direction=direction)
+    except ValueError as exc:
+        return fail(str(exc))
 
     txn = await ledger_service.create_transaction(
         session,
@@ -153,19 +163,14 @@ async def create_transaction(
         amount=payload.amount,
         direction=direction,
         category_id=category_id,
-        account_id=_as_int(payload.account_id),
+        account_id=account_id,
         trade_time=parse_dt(payload.trade_time),
         counterparty=payload.counterparty,
         memo=payload.memo,
         source=TransactionSource.MANUAL,
         is_confirmed=payload.is_confirmed,
+        has_invoice=payload.has_invoice,
     )
-
-    if payload.has_invoice:
-        txn.has_invoice = True
-        session.add(txn)
-        await session.commit()
-        await session.refresh(txn)
 
     # 重复检测
     duplicate = None
@@ -201,6 +206,7 @@ async def create_transaction(
         target_id=txn.id,
         operator="user",
         detail=f"新增{'支出' if direction == TransactionDirection.EXPENSE else '收入'} {payload.amount} 元",
+        extra={"after": to_dict(txn)},
         channel="web",
     )
 
@@ -233,7 +239,11 @@ async def update_transaction(
 ) -> Dict[str, Any]:
     user = await get_or_create_user(session)
 
-    fields = payload.model_dump(exclude_none=True)
+    existing = await ledger_service.get_transaction(session, txn_id, user_id=user.id)
+    if existing is None:
+        return fail("流水不存在", code=404)
+    before = to_dict(existing)
+    fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in ("category_id", "account_id")}
     if "trade_time" in fields:
         fields["trade_time"] = parse_dt(fields["trade_time"])
     if "direction" in fields:
@@ -245,6 +255,11 @@ async def update_transaction(
     for key in ("category_id", "account_id"):
         if key in fields:
             fields[key] = _as_int(fields[key])
+
+    try:
+        await validate_references(session, user_id=user.id, category_id=fields.get("category_id", existing.category_id), account_id=fields.get("account_id", existing.account_id), direction=fields.get("direction", existing.direction))
+    except ValueError as exc:
+        return fail(str(exc))
 
     txn = await ledger_service.update_transaction(session, txn_id, user_id=user.id, **fields)
     if txn is None:
@@ -258,6 +273,7 @@ async def update_transaction(
         target_id=txn.id,
         operator="user",
         detail="修改流水字段: " + ", ".join(fields.keys()),
+        extra={"before": before, "after": to_dict(txn), "fields": list(fields)},
         channel="web",
     )
     return ok(to_dict(txn))
@@ -269,6 +285,10 @@ async def delete_transaction(
     session: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
     user = await get_or_create_user(session)
+    existing = await ledger_service.get_transaction(session, txn_id, user_id=user.id)
+    if existing is None:
+        return fail("流水不存在", code=404)
+    before = to_dict(existing)
     deleted = await ledger_service.delete_transaction(session, txn_id, user_id=user.id)
     if not deleted:
         return fail("流水不存在", code=404)
@@ -281,6 +301,7 @@ async def delete_transaction(
         target_id=txn_id,
         operator="user",
         detail="删除流水",
+        extra={"before": before},
         channel="web",
     )
     return ok({"id": txn_id, "deleted": True})

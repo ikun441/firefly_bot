@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rapidfuzz import fuzz
@@ -137,7 +138,7 @@ def ensure_aware(value: Optional[datetime]) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
     if value.tzinfo is None:
-        return value.replace(tzinfo=TZ_LOCAL).astimezone(timezone.utc)
+        return value.replace(tzinfo=ZoneInfo(get_config().app.timezone)).astimezone(timezone.utc)
     return value.astimezone(timezone.utc)
 
 
@@ -156,6 +157,7 @@ async def create_transaction(
     source: TransactionSource = TransactionSource.MANUAL,
     confidence: float = 1.0,
     is_confirmed: bool = True,
+    has_invoice: bool = False,
 ) -> Transaction:
     """创建一条流水
 
@@ -174,6 +176,7 @@ async def create_transaction(
         source=source,
         confidence=confidence,
         is_confirmed=is_confirmed,
+        has_invoice=has_invoice,
     )
     session.add(txn)
     await session.flush()
@@ -218,9 +221,11 @@ async def update_transaction(
         "has_invoice",
     }
     for key, value in fields.items():
-        if key in allowed and value is not None:
+        if key in allowed and (value is not None or key in {"category_id", "account_id"}):
             if key == "amount":
                 value = abs(float(value))
+            if key == "trade_time":
+                value = ensure_aware(value)
             setattr(txn, key, value)
 
     txn.updated_at = datetime.now(timezone.utc)
@@ -271,10 +276,13 @@ async def list_transactions(
     limit: int = 100,
     offset: int = 0,
     order_desc: bool = True,
+    account_id: Optional[int] = None,
 ) -> List[Transaction]:
     """条件查询流水列表"""
     stmt = select(Transaction).where(Transaction.user_id == user_id)
 
+    if account_id is not None:
+        stmt = stmt.where(Transaction.account_id == account_id)
     if start is not None:
         stmt = stmt.where(Transaction.trade_time >= start)
     if end is not None:
@@ -312,6 +320,7 @@ async def count_transactions(
     keyword: Optional[str] = None,
     only_pending: bool = False,
     only_anomaly: bool = False,
+    account_id: Optional[int] = None,
 ) -> int:
     """统计流水条数。
 
@@ -319,6 +328,8 @@ async def count_transactions(
     否则分页组件会算出与实际列表不符的页数。
     """
     stmt = select(func.count(Transaction.id)).where(Transaction.user_id == user_id)
+    if account_id is not None:
+        stmt = stmt.where(Transaction.account_id == account_id)
     if start is not None:
         stmt = stmt.where(Transaction.trade_time >= start)
     if end is not None:
