@@ -67,11 +67,11 @@ index/
 
 ### 6. 左侧工作区导航
 
-- 七个页面共用一套左侧导航，当前页通过 `aria-current` 标记。
+- 八个页面共用一套左侧导航，当前页通过 `aria-current` 标记。
 - 桌面可折叠为图标栏，折叠状态保存在 `firefly-sidebar`；图标保留可访问名称和提示。
 - 760px 及以下使用左侧抽屉，支持遮罩关闭、Escape、焦点循环和焦点恢复。
 - 抽屉关闭时侧栏不可聚焦；打开时背景工作区不可交互。
-- `Alt+1` 至 `Alt+7` 按导航顺序切换；「跳至主要内容」不修改 Hash 路由。
+- `Alt+1` 至 `Alt+8` 按导航顺序切换；「跳至主要内容」不修改 Hash 路由。
 - 每次重渲染使用独立挂载节点，旧请求不会覆盖新页面；报告生成状态也限定于对应页面实例。
 
 浏览器验证覆盖：桌面与手机七个页面、320px/390px 窄屏、深浅主题、侧栏折叠与图表宽度、报告快速切页后重入、表单草稿保留、确认框取消回车以及 Escape 关闭导航。使用演示数据，真实后端保存、鉴权与协议端推送仍需在实际部署中联调。
@@ -104,3 +104,11 @@ index/
 | `api.updateSettings()` | `PUT /api/settings` | 写回 config.yaml |
 | `api.subscription.status()` | `GET /api/subscription/status` | 推送订阅状态 |
 | `api.subscription.update()` | `PUT /api/subscription/status` | 更新推送订阅 |
+
+### v1.0.1 新模块
+
+- `js/excel-import.js`：模板、填写规范、默认账本、上传与拖入、校验预览、入账及通知结果。使用真实接口，演示模式关闭导入入口。
+- `js/system.js`：版本信息卡片与显式仓库更新操作。
+- `assets/templates/firefly-import.xlsx`：模板下载接口使用的空白模板。
+
+侧栏显示运行版本。Excel 入账后使财务视图缓存失效，下次访问读取新流水。Alt+1 至 Alt+8 按八个页面的侧栏顺序切换。

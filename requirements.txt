@@ -71,10 +71,14 @@ pytesseract>=0.3.13
 pandas>=2.2.0
 # 表格导出 Excel（报告归档）
 openpyxl>=3.1.2
+# XLSX XML 安全解析（Excel 批量记账）
+defusedxml>=0.7.1
+# Windows 时区数据
+tzdata>=2024.1
 
 # ------------------------------ 工具库 ----------------------------------------
 python-dateutil>=2.9.0
-httpx>=0.27.0
+httpx[socks]>=0.27.0
 loguru>=0.7.2
 Jinja2>=3.1.4
 

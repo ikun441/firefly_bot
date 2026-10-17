@@ -30,6 +30,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from firefly import __version__
 from firefly.config import CONFIG_PATH, INDEX_DIR, ensure_dirs, get_config  # noqa: E402
 
 config = get_config()
@@ -108,6 +109,7 @@ def _print_banner() -> None:
     else:
         auth_line = "  🔐 登录鉴权     未启用（任何人可访问）"
 
+    ws_host = scheme_host.replace("http://", "ws://").replace("https://", "wss://")
     width = 62
     lines = [
         "",
@@ -118,7 +120,7 @@ def _print_banner() -> None:
         "",
         f"  🖥  前端控制台   {scheme_host}/",
         f"  📡 API 文档     {scheme_host}/docs",
-        f"  🔌 OneBot 反向WS {scheme_host}{config.onebot.ws_path}",
+        f"  🔌 OneBot 反向WS {ws_host}{config.onebot.ws_path}",
         f"     └─ 协议端请connect到这个地址（WebSocket 客户端模式）",
         "",
         f"  🗄  数据库       {config.database.url}",
@@ -149,7 +151,7 @@ def _print_banner() -> None:
         warnings.append(
             f"ONEBOT_WS_URL 已设置为 {config.onebot.ws_url}，但本项目采用反向 WebSocket，"
             "该值应当留空；协议端应主动连接 "
-            f"{scheme_host}{config.onebot.ws_path}"
+            f"{ws_host}{config.onebot.ws_path}"
         )
 
     print("\n".join(lines), flush=True)
@@ -171,6 +173,8 @@ def _center(text: str, width: int) -> str:
 # ------------------------------------------------------------------------------
 
 app = nonebot.get_asgi()
+app.title = config.app.name
+app.version = __version__
 
 # FastAPI 的 lifespan 由 NoneBot 自己管理，这里把初始化挂到 NoneBot 启动事件上
 from nonebot import get_driver  # noqa: E402

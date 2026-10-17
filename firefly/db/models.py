@@ -42,6 +42,7 @@ class TransactionSource(str, Enum):
     NATURAL_LANGUAGE = "natural_language"  # 自然语言记账
     OCR = "ocr"  # 截图/账单导入
     CSV = "csv"  # CSV 批量导入
+    EXCEL = "excel"  # Excel 模板导入
     SUBSCRIPTION = "subscription"  # 周期订阅自动生成
     API = "api"  # 外部接口写入
 

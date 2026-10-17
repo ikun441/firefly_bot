@@ -166,7 +166,7 @@ async def push_report(
     push_image = image_path if want_image else None
 
     try:
-        send_result = await bot_module.broadcast_summary(push_text, push_image)
+        send_result = await bot_module.broadcast_summary(push_text, push_image, target_type=resolved_type, target_id=resolved_target)
         result["text_sent"] = send_result.get("text_sent", False)
         result["image_sent"] = send_result.get("image_sent", False)
 

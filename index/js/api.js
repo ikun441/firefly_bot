@@ -44,7 +44,7 @@
 
     const init = {
       method: options.method,
-      headers: { Accept: 'application/json' },
+      headers: Object.assign({ Accept: 'application/json' }, options.headers || {}),
     };
 
     if (options.body !== undefined && options.body !== null) {

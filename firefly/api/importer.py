@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
@@ -17,6 +19,57 @@ from ..services import importer
 from .deps import fail, get_or_create_user, ok, to_dict
 
 router = APIRouter(tags=["import"])
+
+
+@router.get("/import/excel/template")
+async def excel_template():
+    from ..config import INDEX_DIR
+    return FileResponse(INDEX_DIR / "assets" / "templates" / "firefly-import.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        filename="Firefly-import-template.xlsx")
+
+
+@router.post("/import/excel")
+async def import_excel(
+    file: UploadFile = File(...),
+    account_id: Optional[int] = Form(default=None),
+    dry_run: bool = Query(default=False),
+    dry_run_form: Optional[bool] = Form(default=None, alias="dry_run"),
+    session: AsyncSession = Depends(get_session),
+):
+    from ..services import excel_import
+    if dry_run_form is not None:
+        dry_run = dry_run_form
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".xlsx"):
+        return fail("仅支持 .xlsx 文件，请将旧版 .xls 另存为 .xlsx")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    await file.close()
+    if error := _check_size(content, filename):
+        return fail(error)
+    try:
+        items = await asyncio.to_thread(excel_import.parse_excel, content)
+        user = await get_or_create_user(session)
+        items = await excel_import.resolve_items(session, user_id=user.id, items=items, account_id=account_id)
+        if dry_run:
+            return ok({"dry_run": True, "total": len(items), "preview": items[:50], "message": "校验通过，尚未入账，预览不发送通知"})
+        result = await excel_import.import_excel_items(session, user_id=user.id, items=items, filename=filename)
+        await audit_service.log_action(session, "import_excel", user_id=user.id,
+                                       target_type="import_batch", target_id=result["batch_id"],
+                                       operator="user", detail=result["message"], channel="web")
+        # Notify only after the whole batch and its audit record are durable.
+        await session.commit()
+    except excel_import.ExcelValidationError as exc:
+        await session.rollback()
+        return fail(str(exc), detail={"errors": exc.errors[:100]})
+    except ValueError as exc:
+        await session.rollback()
+        return fail(str(exc))
+    except Exception:
+        await session.rollback()
+        return fail("导入未完成，本批次已回滚；请检查文件格式和后端日志")
+    result["notification"] = await excel_import.notify_import(result)
+    return ok(result)
 
 # 允许的导入文件类型与体积上限
 ALLOWED_CSV_EXT = (".csv", ".txt")

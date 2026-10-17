@@ -130,7 +130,7 @@ def resolve_target(
 async def send_text(
     text: str,
     *,
-    target_type: str = "group",
+    target_type: Optional[str] = None,
     target_id: Optional[str] = None,
 ) -> bool:
     """发送纯文本消息。返回是否真的发出去了。"""
@@ -153,7 +153,8 @@ async def send_text(
     try:
         from nonebot.adapters.onebot.v11 import Message
 
-        message = Message(text)
+        from nonebot.adapters.onebot.v11 import MessageSegment
+        message = Message(MessageSegment.text(text))
         if kind == "group":
             await bot.send_group_msg(group_id=int(target), message=message)
         else:
@@ -172,7 +173,7 @@ async def send_text(
 async def send_image(
     image_path: Path | str,
     *,
-    target_type: str = "group",
+    target_type: Optional[str] = None,
     target_id: Optional[str] = None,
 ) -> bool:
     """发送图片消息。"""
@@ -217,7 +218,7 @@ async def send_image(
         return False
 
 
-async def broadcast_summary(text: str, image_path: Optional[Path | str] = None) -> Dict[str, Any]:
+async def broadcast_summary(text: str, image_path: Optional[Path | str] = None, *, target_type: Optional[str] = None, target_id: Optional[str] = None) -> Dict[str, Any]:
     """发送一条报告消息（文字摘要 + 可选图片）。
 
     做法是分两条发出：先图后文。OneBot 的图文混排在不同协议端表现不一致，
@@ -227,7 +228,7 @@ async def broadcast_summary(text: str, image_path: Optional[Path | str] = None) 
 
     # 目标解析交给 resolve_target，未配置 push.target_id 时会兜底到 SUPERUSERS，
     # 避免「用户配了超级用户、界面提示已推送、实际却什么都没发」这种静默失败。
-    target_type, target_id = resolve_target()
+    target_type, target_id = resolve_target(target_type=target_type, target_id=target_id)
 
     result = {
         "text_sent": False,

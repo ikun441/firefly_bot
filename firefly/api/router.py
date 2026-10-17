@@ -23,6 +23,7 @@ from . import (
     settings,
     stats,
     subscription,
+    system,
     taxcheck,
     transaction,
 )
@@ -45,6 +46,7 @@ for module in (
     audit,
     push,
     subscription,
+    system,
     settings,
     # 账单批量导入（P2 · 2-1）
     importer,

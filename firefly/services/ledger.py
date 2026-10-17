@@ -723,6 +723,7 @@ async def find_duplicates(
     direction: Optional[TransactionDirection] = None,
     window_minutes: Optional[int] = None,
     exclude_id: Optional[int] = None,
+    account_id: Optional[int] = None,
 ) -> List[Transaction]:
     """查找疑似重复流水
 
@@ -753,6 +754,8 @@ async def find_duplicates(
     )
     if direction is not None:
         stmt = stmt.where(Transaction.direction == direction)
+    if account_id is not None:
+        stmt = stmt.where(Transaction.account_id == account_id)
     if exclude_id is not None:
         stmt = stmt.where(Transaction.id != exclude_id)
 

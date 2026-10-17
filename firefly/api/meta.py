@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
+from .. import __version__
 from ..db.session import get_session
 from .deps import ok, to_dict
 
@@ -23,10 +24,10 @@ async def health() -> Dict[str, Any]:
     error = None
 
     try:
-        session: AsyncSession = await get_session().__anext__()
+        from ..db.session import session_scope
         from sqlmodel import text
-
-        await session.execute(text("SELECT 1"))
+        async with session_scope() as session:
+            await session.execute(text("SELECT 1"))
         db_ok = True
     except Exception as exc:  # noqa: BLE001 - 健康检查需要吞掉所有异常
         error = f"{type(exc).__name__}: {exc}"
@@ -34,7 +35,7 @@ async def health() -> Dict[str, Any]:
     payload = {
         "status": "ok" if db_ok else "degraded",
         "app": cfg.app.name,
-        "version": cfg.app.version,
+        "version": __version__,
         "database": db_ok,
         "llm_ready": cfg.llm.is_ready,
         "time": datetime.now().isoformat(timespec="seconds"),
@@ -63,7 +64,7 @@ async def bootstrap() -> Dict[str, Any]:
         {
             "app_name": cfg.app.name,
             "subtitle": cfg.app.subtitle,
-            "version": cfg.app.version,
+            "version": __version__,
             "debug": cfg.app.debug,
             "timezone": cfg.app.timezone,
             "currency_symbol": cfg.ledger.currency_symbol,
@@ -92,7 +93,7 @@ async def meta(session: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
         {
             "app_name": cfg.app.name,
             "subtitle": cfg.app.subtitle,
-            "version": cfg.app.version,
+            "version": __version__,
             "port": cfg.server.port,
             "timezone": cfg.app.timezone,
             "debug": cfg.app.debug,

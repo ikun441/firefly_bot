@@ -37,7 +37,7 @@ INDEX_DIR: Path = BASE_DIR / "index"
 class AppConfig(BaseModel):
     name: str = "流萤 Firefly"
     subtitle: str = "智能财报总结与财税优化助手"
-    version: str = "0.1.0"
+    version: str = "1.0.1"
     debug: bool = False
     timezone: str = "Asia/Shanghai"
 

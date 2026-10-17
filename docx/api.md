@@ -1,6 +1,6 @@
 # 流萤 Firefly · API 接口文档
 
-> 本文档描述全部业务接口的**调用规范、参数约定与注意事项**。
+> 当前版本：v1.0.1。本文档描述业务接口的调用规范、参数约定与注意事项。
 > 交互式文档（Swagger UI）：`http://127.0.0.1:2525/docs`
 > OpenAPI 描述：`http://127.0.0.1:2525/api/openapi.json`
 
@@ -11,7 +11,7 @@
 ### 1.1 Base URL 与路由前缀
 
 - 开发/演示默认地址：`http://127.0.0.1:2525`
-- **所有业务接口挂在 `/api` 前缀下**，共 **71 个路由**，按 17 个模块分组。
+- **所有业务接口挂在 `/api` 前缀下**，完整清单以 OpenAPI 描述为准。
 
 ### 1.2 统一响应体
 
@@ -444,3 +444,58 @@ summary_text / payload`。`summary_text` 是可直接发到聊天窗口的纯文
 - Nginx 反代必须放行 WebSocket 升级头（协议端连接必需）。
 - 手动改 `config.yaml` 后需重启；前端设置页保存**立即生效**。
 - 测试回归：`python tests/test_api.py`（98 项用例）。
+
+## 5. v1.0.1：Excel 批量记账
+
+### GET `/api/import/excel/template`
+
+需登录（启用鉴权时）。返回 XLSX 文件流，不使用 JSON 信封。
+工作表「记账数据」为空白输入区；「填写说明」不参与导入。
+
+| 列名 | 规则 |
+| --- | --- |
+| 交易日期 | 必填，Excel 日期或 ISO / YYYY-MM-DD[ HH:MM]；无时区时按 app.timezone |
+| 收支类型 | 必填，收入 / 支出；接口也接受 income / expense |
+| 金额 | 必填，正数、最多两位小数、最大 100000000 元 |
+| 类别 | 可选，已有类别且与收支方向一致；空白归入相应其他类别 |
+| 账本名称 | 可选，已有且唯一的名称；空白使用 account_id 默认账本 |
+| 交易对方 / 备注 | 最多 128 / 512 字 |
+| 是否有发票 | 是 / 否，留空视为否 |
+
+### POST `/api/import/excel`
+
+`multipart/form-data`：`file`（必填 .xlsx）、`account_id`（可选默认账本）、`dry_run`（可选 bool，默认 false）。
+`dry_run` 同时接受 Query 和 Form，表单显式值优先。仅支持未加密、无宏、不含公式的 XLSX；上传最大 8MB、解压最大 64MB、2000 行、32 列。
+只读「记账数据」工作表；没有该名称则读取首个工作表。首行必须为表头。
+
+预览返回 `data: {dry_run:true,total,preview:[最多50条],message}`，不写交易或批次、不发送消息。
+校验失败返回 `success:false`，逐行错误位于 `detail.errors:[{row,message}]`（最多返回100条）。有任何填写错误，整批不入账。
+
+成功示例：
+```json
+{"success":true,"data":{"batch_id":1,"total":2,"imported_count":2,"duplicate_count":0,"failed_count":0,"income":100.0,"expense":12.3,"message":"成功入账 2 笔，重复跳过 0 笔","notification":{"attempted":true,"sent":true,"message":"导入结果已推送到协议端"}}}
+```
+
+另含 `filename / imported:[{row,id,amount,direction}] / duplicates:[{row,duplicate_of}]`。
+去重范围：同用户、同账本、同方向、同金额、配置时间窗口及匹配对方；跨账本不视为重复。
+账目、批次与审计提交成功后才通知。推送关闭、未连接或发送超时只影响 `notification`，不会撤销已保存账目；没有新增时不重复推送。
+通知沿用 push.target_type / target_id，空目标可由 SUPERUSERS 兜底。
+
+## 6. v1.0.1：版本与仓库更新
+
+### GET `/api/system/version`
+
+需登录（启用鉴权时）。返回 `running_version / installed_version / commit / branch / repository / target_branch / update_supported / reason / restart_required`。
+只查询本地 Git，不发起网络拉取。运行版本来自已加载代码；安装版本来自磁盘代码，二者不同表示需要重启。
+
+### POST `/api/system/update`
+
+需登录（启用鉴权时），仅允许本机请求，且必须带 `X-Firefly-Update: 1`。带 Origin 时须与当前 Host 一致。
+不接受远端地址、分支或 Shell 命令参数；只从固定官方 origin 的 main 执行 fetch 和 merge --ff-only。
+
+前提：Git 安装版、官方 origin、main 分支、源码与暂存区无未提交改动。仅修改 config.yaml 可以更新。
+更新前备份到 `data/updates/`，更新后保留用户配置并采用新发布版本号；不修改 .env 或数据库，不自动安装依赖或重启。
+分叉、非快进、未提交源码、Git 失败等返回 `success:false`；缺少操作标记 HTTP 400，来源或客户端不符 HTTP 403，未登录 HTTP 401。
+成功返回 `updated / running_version / installed_version / commit / restart_required / dependencies_changed / config_backup / message`；已经最新时 `updated:false`。
+
+bootstrap、meta、health 的 version 与运行代码一致，OpenAPI info.version 也同步。
