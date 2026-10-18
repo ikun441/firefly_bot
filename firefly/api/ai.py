@@ -94,7 +94,7 @@ async def ai_status() -> Dict[str, Any]:
             "ready": is_ready(),
             "model": cfg.llm.model,
             "base_url": cfg.llm.base_url,
-            "hint": "" if is_ready() else "请在根目录 .env 中配置 LLM_API_KEY 后重启",
+            "hint": "" if is_ready() else "请配置 llm.api_key 或环境变量 LLM_API_KEY 后重启",
         }
     )
 
@@ -261,10 +261,10 @@ async def chat(
     user = await get_or_create_user(session)
 
     from ..ai.assistant import answer_question
+    from ..ai.tool_query import explicit_question, query_with_tools
 
-    result = await answer_question(
-        session, user_id=user.id, question=payload.question, history=payload.history
-    )
+    explicit = explicit_question(payload.question)
+    result = await (query_with_tools(session, user_id=user.id, question=explicit, history=payload.history) if explicit is not None else answer_question(session, user_id=user.id, question=payload.question, history=payload.history))
 
     await audit_service.log_action(
         session,

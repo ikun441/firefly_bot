@@ -12,11 +12,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from .llm import LLMNotReadyError, chat, is_ready
+from .llm import LLMNotReadyError, chat, is_ready, safe_error
 
 # 提示词单独放常量，便于论文里对照与迭代
 SYSTEM_PROMPT = """你是一位资深的企业财税顾问，擅长把枯燥的财务数据翻译成老板能听懂的话。
@@ -139,7 +140,7 @@ def _build_user_prompt(payload: Dict[str, Any]) -> str:
 
     return (
         "以下是一份企业财务税务报告的原始数据（JSON）：\n\n"
-        f"{digest}\n\n"
+        f"{json.dumps(digest, ensure_ascii=False, default=str)}\n\n"
         "请写一段 200-400 字的中文总结，覆盖："
         "① 本期整体经营与现金状况的定性判断；"
         "② 最值得警惕的 1-3 个问题及其原因；"
@@ -180,7 +181,7 @@ async def summarize_report(
     }
 
     if not is_ready():
-        result["error"] = "LLM 未配置（.env 的 LLM_API_KEY 为空）"
+        result["error"] = "LLM 未就绪，请检查 llm.enabled、llm.api_key 或环境变量"
         return result
 
     if not payload:
@@ -211,8 +212,8 @@ async def summarize_report(
     except LLMNotReadyError as exc:
         result["error"] = f"LLM 未就绪：{exc}"
     except Exception as exc:  # noqa: BLE001 - 总结失败不应影响推送
-        logger.warning("AI 总结失败：{}: {}", type(exc).__name__, exc)
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        logger.warning("AI 总结失败：{}", type(exc).__name__)
+        result["error"] = safe_error(exc)
     finally:
         result["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
 

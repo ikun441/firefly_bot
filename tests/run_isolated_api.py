@@ -32,6 +32,8 @@ async def main():
         with patch('tests.test_api.httpx.AsyncClient',factory): result=await tester.run()
         print_report(result)
         (Path(tempfile.gettempdir())/'firefly-api-suite-results.json').write_text(json.dumps({'passed':result.passed,'failed':result.failed,'skipped':result.skipped,'warned':result.warned,'results':[r.__dict__ for r in result.results]},ensure_ascii=False),encoding='utf-8')
+        from firefly.scheduler.tasks import shutdown_scheduler
+        shutdown_scheduler()
         await db.dispose_db()
         return 1 if result.failed else 0
 

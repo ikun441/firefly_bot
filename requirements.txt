@@ -62,6 +62,8 @@ nonebot-plugin-htmlrender>=0.6.7
 playwright>=1.44.0
 # 图片处理：账单截图预处理、图像裁剪
 Pillow>=10.3.0
+# 安全 Markdown → HTML，用于 QQ AI 回复图片排版
+markdown-it-py>=3.0.0
 # 中文 OCR（P2-1 账单截图解析）
 # 说明：PaddleOCR 资源占用较大，若安装困难可仅依赖多模态 LLM 解析
 # paddleocr 暂不默认安装，参见 README「可选增强依赖」
@@ -79,6 +81,7 @@ tzdata>=2024.1
 # ------------------------------ 工具库 ----------------------------------------
 python-dateutil>=2.9.0
 httpx[socks]>=0.27.0
+socksio>=1.0.0
 loguru>=0.7.2
 Jinja2>=3.1.4
 

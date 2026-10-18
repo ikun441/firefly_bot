@@ -45,7 +45,8 @@ HELP_TEXT = """✨ 流萤 · 财务财税助手
 # ------------------------------------------------------------------------------
 
 async def _addressed(event: Event) -> bool:
-    return isinstance(event, PrivateMessageEvent) or bool(getattr(event, "to_me", False))
+    from ..ai.tool_query import explicit_question
+    return isinstance(event, PrivateMessageEvent) or bool(getattr(event, "to_me", False)) or explicit_question(event.get_plaintext()) is not None
 
 
 def _text(value):
@@ -66,22 +67,38 @@ async def _handle_message(bot: Bot, event: Event) -> None:
     from ..ai.assistant import answer_question
     from ..db.session import session_scope
     from ..services import bot_conversation, audit
+    from ..ai.tool_query import explicit_question, query_with_tools
     text = event.get_plaintext().strip()
     if not text or text.startswith("/"):
         return
+    ai_reply = False
     async with session_scope() as session:
         user = await _event_user(session, event)
         key = bot_conversation.conversation_key(bot.self_id, event.get_session_id(), event.get_user_id())
-        try:
-            reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
-        except ValueError as exc:
-            await session.rollback()
-            reply = f"未入账：{exc}。请取消本轮并重新发送记账内容。"
+        explicit = explicit_question(text)
+        if explicit is not None:
+            result = await query_with_tools(session, user_id=user.id, question=explicit)
+            reply = result["answer"]
+            ai_reply = result.get("engine") == "llm"
+            await audit.log_action(session, "ai_read_query", user_id=user.id, target_type="ai", channel="bot", detail=explicit[:120], extra={"tools": result.get("tools"), "read_only": True})
+        else:
+            try:
+                reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
+            except ValueError as exc:
+                await session.rollback()
+                reply = f"未入账：{exc}。请取消本轮并重新发送记账内容。"
         if reply is None:
             result = await answer_question(session, user_id=user.id, question=text)
             reply = result.get("answer") or "请使用 /帮助 查看用法。"
+            ai_reply = result.get("engine") == "llm" or result.get("analysis_engine") == "llm"
             await audit.log_action(session, "ai_chat", user_id=user.id, target_type="ai", operator="ai", channel="bot", detail=text[:120], extra={"intent": result.get("intent"), "tools": result.get("tools")})
         await session.commit()
+    if ai_reply:
+        from ..render.ai_reply import send_ai_reply
+        await send_ai_reply(record.send, reply)
+        # finish stays outside render/send exception handling (no duplicate fallback replies).
+        await record.finish()
+        return
     await record.finish(_text(reply))
 
 

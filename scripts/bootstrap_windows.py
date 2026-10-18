@@ -57,7 +57,7 @@ def prepare_environment(command):
         raise RuntimeError('firefly_env uses an unsupported Python. Rename it and restart with Python 3.11.')
     marker = VENV / '.requirements.sha256'
     digest = hashlib.sha256((ROOT / 'requirements.txt').read_bytes()).hexdigest()
-    probe = subprocess.run([str(python), '-c', 'import nonebot,fastapi,sqlmodel,uvicorn,openpyxl,defusedxml,socksio'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    probe = subprocess.run([str(python), '-c', 'import nonebot,fastapi,sqlmodel,uvicorn,openpyxl,defusedxml,socksio,markdown_it'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
     if not marker.exists() or marker.read_text().strip() != digest or probe:
         run([str(python), '-m', 'pip', 'install', '--upgrade', 'pip'], required=False)
         code = run([str(python), '-m', 'pip', 'install', '-r', 'requirements.txt', '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple'], required=False)

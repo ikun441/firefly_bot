@@ -143,12 +143,13 @@ async def handle_message(session, *, user_id, key, text):
             categories = await ledger.list_categories(session, user_id=user_id)
             items = await refine_transactions(draft.original, draft.items, draft.feedback, [c.name for c in categories])
             normalized = await normalize_items(session, user_id, items)
-        except Exception:
+        except Exception as exc:
             await session.refresh(draft)
             if draft.revision == revision and draft.state == "refining":
                 draft.state = "needs_revision"
                 session.add(draft)
-            return "AI 重解析未成功，未入账。请检查 LLM 配置，补充修改意见后重试，或回复取消。"
+            from ..ai.llm import safe_error
+            return "AI 重解析未成功，未入账。" + safe_error(exc) + "。补充修改意见后重试，或回复取消。"
         await session.refresh(draft)
         if draft.revision != revision or draft.state != "refining":
             return "本轮已取消或发生变化，未入账。"

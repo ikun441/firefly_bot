@@ -25,7 +25,7 @@
         el('div.page-head', {}, [
           el('h1.page-title', {}, [el('span', { text: '🎯' }), el('span', { text: '预算管理' })]),
           el('p.page-subtitle', {
-            text: '为常用类别设定周期额度。达到 80% 时流萤会通过 Bot 主动预警，超支后计入报告。',
+            text: '为总支出或常用类别设定周期额度。开启预算提醒、阈值提醒与协议推送后，每分钟检查；达到预警比例和超支时通过 Bot 通知，同一天同一预算每个等级最多提醒一次。',
           }),
         ])
       );
@@ -1212,7 +1212,7 @@
   };
 
   const FIELD_HINTS = {
-    api_key: '敏感项，请编辑根目录 .env 中的 LLM_API_KEY',
+    api_key: '敏感项，请编辑 config.yaml 的 llm.api_key 或 .env 的 LLM_API_KEY',
     port: '修改后需重启后端生效',
     api_key_env: '从环境变量读取的键名，不在前端展示真实值',
     debug: '开启后前端全部使用模拟数据，不请求真实接口，适合演示与联调排查',
@@ -1249,7 +1249,7 @@
 
   function buildMockSettings() {
     return {
-      app: { name: '流萤 Firefly', subtitle: '财报总结优化 · 财税智能助手', version: '1.0.2', debug: false, timezone: 'Asia/Shanghai' },
+      app: { name: '流萤 Firefly', subtitle: '财报总结优化 · 财税智能助手', version: '1.0.3', debug: false, timezone: 'Asia/Shanghai' },
       server: { host: '127.0.0.1', port: 2525, show_welcome: true },
       database: { url: 'sqlite+aiosqlite:///./data/firefly.db', echo: false },
       ledger: {

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,7 +38,7 @@ INDEX_DIR: Path = BASE_DIR / "index"
 class AppConfig(BaseModel):
     name: str = "流萤 Firefly"
     subtitle: str = "智能财报总结与财税优化助手"
-    version: str = "1.0.2"
+    version: str = "1.0.3"
     debug: bool = False
     timezone: str = "Asia/Shanghai"
 
@@ -62,7 +63,7 @@ class LLMConfig(BaseModel):
     timeout: int = 60
     max_retries: int = 2
     api_key_env: str = "LLM_API_KEY"
-    # 运行时从 .env 注入，不写入 config.yaml
+    # YAML is supported; environment variables override it. Display APIs always redact it.
     api_key: str = ""
 
     @property
@@ -277,6 +278,8 @@ class Config(BaseModel):
                 group_data[field] = "******" if group_data[field] else ""
         if isinstance(data.get("llm"), dict):
             data["llm"]["api_key"] = "******" if self.llm.api_key else ""
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.llm.api_key_env or ""):
+                data["llm"]["api_key_env"] = "LLM_API_KEY"
         return data
 
 
@@ -498,9 +501,12 @@ def load_config(reload: bool = False) -> Config:
 
     config = Config.model_validate(raw)
 
-    # 安全值从环境变量注入，不经过 YAML
-    api_key_env_name = config.llm.api_key_env or "LLM_API_KEY"
-    config.llm.api_key = os.getenv(api_key_env_name, "") or ""
+    # Environment → YAML api_key → legacy key accidentally stored in api_key_env.
+    env_name = (config.llm.api_key_env or "LLM_API_KEY").strip()
+    valid_env_name = bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_name))
+    legacy_key = env_name if not valid_env_name and env_name.startswith(("sk-", "AIza")) else ""
+    config.llm.api_key_env = env_name if valid_env_name else "LLM_API_KEY"
+    config.llm.api_key = (os.getenv(config.llm.api_key_env) or os.getenv("LLM_API_KEY") or config.llm.api_key or legacy_key).strip()
     if os.getenv("LLM_BASE_URL"):
         config.llm.base_url = os.getenv("LLM_BASE_URL", "") or config.llm.base_url
     if os.getenv("LLM_MODEL"):

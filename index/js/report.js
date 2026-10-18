@@ -144,12 +144,13 @@
                 const parts = [];
                 if (data.image_sent) parts.push('报告图片');
                 if (data.text_sent) parts.push('文字摘要');
-                if (data.ai_engine === 'llm') parts.push('AI 解读');
+                if (data.ai_delivered) parts.push('AI 解读');
                 let msg = '已推送到协议端（' + parts.join(' + ') + '）';
                 if (data.ai_elapsed_ms) {
                   msg += '，AI 总结耗时 ' + (data.ai_elapsed_ms / 1000).toFixed(1) + 's';
                 }
                 FF.toast(msg, 'success', 5200);
+                if (data.errors && data.errors.length) FF.toast(data.errors.join('；'), 'warning', 7000);
               } else {
                 const why =
                   (data.errors && data.errors[0]) || '协议端未连接或未配置推送目标';

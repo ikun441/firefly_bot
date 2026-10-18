@@ -117,3 +117,8 @@ index/
 ## v1.0.2 交互约定
 
 自然语言结果以 category / category_id 匹配收支类别，下拉框显示值与提交值一致，has_invoice 为独立可编辑字段。流水管理使用真实接口，演示模式禁用；编辑用 PATCH，显式 null 清空归属。新增、修改、删除后广播 firefly:transactions-changed，使财务视图缓存失效。原生 dialog 提供焦点约束和 Escape 关闭，所有用户文本按 textContent 展示。
+
+## v1.0.3
+
+预算状态先统一后端字段，再渲染金额、比例和状态；总览每次进入读取当月执行情况，不拿历史报告预算冒充当前预算。预算百分数不乘 100。用户上传 Logo 位于 assets/brand/firefly-logo.jpg，用于侧栏、登录、页脚与 favicon，报告通过 data URI 内嵌，离线渲染不依赖网页地址。
+AI 显式入口为“ai 问题”，网页及 QQ 共享只读 function calling；推送提示区分 ai_generated 与 ai_delivered，生成失败或渲染失败会单独提示。

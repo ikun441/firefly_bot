@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +44,26 @@ def is_ready() -> bool:
     return get_config().llm.is_ready
 
 
+def safe_error(exc: Exception) -> str:
+    """Classify failures without disclosing provider response bodies or credentials."""
+    if isinstance(exc, LLMNotReadyError):
+        return "LLM 未启用或未配置密钥，请检查 llm.enabled、llm.api_key 或环境变量"
+    if isinstance(exc, ImportError):
+        return "缺少模型调用依赖，请在运行环境执行 python -m pip install -r requirements.txt（含 socksio）"
+    status = getattr(exc, "status_code", None)
+    if status in (401, 403):
+        return "模型服务拒绝认证，请检查密钥及服务权限"
+    if status == 429:
+        return "模型服务限流或额度不足，请稍后重试"
+    if status in (400, 404, 422):
+        return "模型服务不支持当前模型、请求参数或 function calling，请核对配置"
+    if "timeout" in type(exc).__name__.lower():
+        return "模型请求超时，请稍后重试"
+    if isinstance(exc, (ValueError, TypeError)):
+        return "模型返回的结构化内容无效，请补充说明后重试"
+    return "模型服务调用失败（" + type(exc).__name__ + "），请检查网络与配置"
+
+
 def get_client():
     """构造 OpenAI 兼容客户端
 
@@ -52,8 +74,10 @@ def get_client():
         raise LLMNotReadyError("LLM 未启用（config.yaml: llm.enabled = false）")
     if not config.llm.api_key:
         raise LLMNotReadyError(
-            "未配置 LLM API Key，请在 .env 中设置 LLM_API_KEY"
+            "未配置 LLM API Key，请设置 config.yaml 的 llm.api_key 或环境变量 LLM_API_KEY"
         )
+    if any(os.getenv(key, "").lower().startswith(("socks4:", "socks5:", "socks5h:")) for key in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")) and importlib.util.find_spec("socksio") is None:
+        raise ImportError("SOCKS proxy requires socksio")
 
     try:
         from openai import AsyncOpenAI
@@ -85,12 +109,15 @@ async def chat(
         return _CACHE[key]
 
     client = get_client()
-    response = await client.chat.completions.create(
-        model=config.llm.model,
-        messages=messages,  # type: ignore[arg-type]
-        temperature=temp,
-        max_tokens=tokens,
-    )
+    try:
+        response = await client.chat.completions.create(
+            model=config.llm.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=temp,
+            max_tokens=tokens,
+        )
+    finally:
+        await client.close()
     content = (response.choices[0].message.content or "").strip()
 
     if use_cache:

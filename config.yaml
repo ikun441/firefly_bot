@@ -1,7 +1,7 @@
 app:
   name: 流萤 Firefly
   subtitle: 智能财报总结与财税优化助手
-  version: 1.0.2
+  version: 1.0.3
   debug: false
   timezone: Asia/Shanghai
 server:
@@ -20,6 +20,7 @@ llm:
   timeout: 60
   max_retries: 2
   api_key_env: LLM_API_KEY
+  api_key: '' # 本机填写有效密钥，勿提交到仓库
 ledger:
   currency: CNY
   currency_symbol: ¥

@@ -236,7 +236,7 @@
     }
 
     // 仅首次渲染（避免重复请求）；记账页每次都刷新以保证数据新鲜
-    if (container.dataset.rendered === '1' && key !== 'collector' && key !== 'report' && key !== 'excel' && key !== 'transactions') {
+    if (container.dataset.rendered === '1' && key !== 'dashboard' && key !== 'collector' && key !== 'report' && key !== 'excel' && key !== 'transactions') {
       FF.refreshView(viewNode);
       window.scrollTo({ top: 0, behavior: 'instant' });
       return;

@@ -218,7 +218,7 @@ async def send_image(
         return False
 
 
-async def broadcast_summary(text: str, image_path: Optional[Path | str] = None, *, target_type: Optional[str] = None, target_id: Optional[str] = None) -> Dict[str, Any]:
+async def broadcast_summary(text: str, image_path: Optional[Path | str] = None, *, target_type: Optional[str] = None, target_id: Optional[str] = None, text_enabled: Optional[bool] = None) -> Dict[str, Any]:
     """发送一条报告消息（文字摘要 + 可选图片）。
 
     做法是分两条发出：先图后文。OneBot 的图文混排在不同协议端表现不一致，
@@ -247,7 +247,7 @@ async def broadcast_summary(text: str, image_path: Optional[Path | str] = None, 
     if image_path and config.push.send_image:
         result["image_sent"] = await send_image(image_path, target_type=target_type, target_id=target_id)
 
-    if text and config.push.send_summary_text:
+    if text and (config.push.send_summary_text if text_enabled is None else text_enabled):
         result["text_sent"] = await send_text(text, target_type=target_type, target_id=target_id)
 
     return result

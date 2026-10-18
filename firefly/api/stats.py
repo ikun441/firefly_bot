@@ -145,7 +145,11 @@ async def budget_status(
             f"不支持的周期类型：{period}，可选 {sorted(VALID_PERIODS)}",
             code=400,
         )
-    start, end = ledger_service.period_bounds(period)
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from ..config import get_config
+    start, end = ledger_service.period_bounds(period, reference=datetime.now(ZoneInfo(get_config().app.timezone)))
+    start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
     status = await budget_service.get_budget_status(
         session, user_id=user.id, start=start, end=end, period=period
     )

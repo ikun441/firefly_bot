@@ -316,3 +316,8 @@ kbd { font: inherit; border: 1px solid var(--border); padding: 1px 3px; border-r
 .transaction-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 @media (max-width:900px) { .transaction-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:520px) { .transaction-filters,.transaction-form-grid { grid-template-columns:minmax(0,1fr); } .transaction-dialog { padding:4px; } }
+
+.brand-mark { overflow:hidden; }
+.brand-mark img { width:100%; height:100%; object-fit:cover; display:block; }
+.auth-logo img { width:72px; height:72px; object-fit:cover; border-radius:20px; box-shadow:var(--shadow-glow); }
+.footer-logo { object-fit:cover; border-radius:7px; }

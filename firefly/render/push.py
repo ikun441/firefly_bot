@@ -96,77 +96,55 @@ async def push_report(
     result["target_type"] = resolved_type
     result["target_id"] = resolved_target
 
-    # 1) 渲染静态 HTML（只要需要图片就必须有 HTML）
-    html_path: Optional[Path] = None
-    if want_image:
-        try:
-            html_path = await render_report_html(report)
-            result["html_path"] = str(html_path)
-            if session is not None:
-                report.html_path = str(html_path)
-                session.add(report)
-                await session.commit()
-        except Exception as exc:  # noqa: BLE001
-            result["errors"].append(f"HTML 渲染失败: {type(exc).__name__}: {exc}")
-
-    # 2) 渲染图片（供协议端发送）
-    image_path: Optional[Path] = None
-    if want_image and html_path is not None:
-        try:
-            output = DATA_DIR / "reports" / f"report_{getattr(report, 'id', 'unknown')}.png"
-            rendered = await render_html_to_image(
-                html_path.read_text(encoding="utf-8"),
-                output_path=output,
-                width=config.push.image_width,
-                scale=config.push.image_scale,
-            )
-            # 压缩到协议端能接受的高度。QQ 会拒收超长图，
-            # 而失败只发生在协议端一侧，表现为「图片没发出去却没有任何报错」。
-            image_path = shrink_for_qq(rendered)
-            result["image_path"] = str(image_path)
-
-            if session is not None:
-                report.image_path = str(rendered)
-                session.add(report)
-                await session.commit()
-        except Exception as exc:  # noqa: BLE001 - 图片失败仍要发文字
-            result["errors"].append(f"图片渲染失败: {type(exc).__name__}: {exc}")
-
-    # 3) 组装文本内容
-    summary_text = getattr(report, "summary_text", "") or ""
-    if not config.push.send_summary_text:
-        summary_text = ""
-
-    # AI 总结是**追加**在规则摘要之后，不是替代：
-    # 规则摘要保证每个数字都准确，AI 负责解释「为什么」与「怎么办」。
-    if use_ai and summary_text:
+    # Generate AI text before rendering so text/image/both carry the same interpretation.
+    summary_text = (getattr(report, "summary_text", "") or "") if config.push.send_summary_text else ""
+    ai_text = ""
+    if use_ai:
         try:
             from ..ai.summarizer import summarize_report
-
-            ai_result = await summarize_report(
-                getattr(report, "payload", None) or {},
-                temperature=ai_temperature,
-                max_tokens=ai_max_tokens,
-            )
+            ai_result = await summarize_report(getattr(report, "payload", None) or {},
+                temperature=config.push.ai_temperature if ai_temperature is None else ai_temperature,
+                max_tokens=config.push.ai_max_tokens if ai_max_tokens is None else ai_max_tokens)
             result["ai_engine"] = ai_result.get("engine")
             result["ai_elapsed_ms"] = ai_result.get("elapsed_ms")
             if ai_result.get("error"):
-                result["errors"].append(f"AI 总结未生成：{ai_result['error']}")
+                result["errors"].append("AI 总结未生成：" + ai_result["error"])
+            if ai_result.get("engine") == "llm":
+                ai_text = (ai_result.get("text") or "").strip()
+        except Exception as exc:
+            from ..ai.llm import safe_error
+            result["errors"].append("AI 总结未生成：" + safe_error(exc))
+    result["ai_generated"] = bool(ai_text)
+    if ai_text:
+        summary_text = (summary_text + "\n\n🤖 AI 解读：\n" + ai_text).strip()
 
-            ai_text = (ai_result.get("text") or "").strip()
-            # engine=fallback 说明用的是传入的 fallback，而非模型输出，
-            # 此时不要重复拼接（fallback 就是规则摘要本身）
-            if ai_text and ai_result.get("engine") == "llm":
-                summary_text = f"{summary_text}\n\n🤖 AI 解读：\n{ai_text}"
-        except Exception as exc:  # noqa: BLE001 - 总结失败不影响推送
-            result["errors"].append(f"AI 总结异常：{type(exc).__name__}: {exc}")
+    html_path, image_path = None, None
+    if want_image:
+        try:
+            from uuid import uuid4
+            html_path = await render_report_html(report, ai_summary=ai_text, artifact_id=uuid4().hex)
+            result["html_path"] = str(html_path)
+            rendered = await render_html_to_image(html_path.read_text(encoding="utf-8"),
+                output_path=html_path.with_suffix(".png"), width=config.push.image_width, scale=config.push.image_scale)
+            image_path = shrink_for_qq(rendered)
+            result["image_path"] = str(image_path)
+            if session is not None:
+                report.html_path, report.image_path = str(html_path), str(rendered)
+                session.add(report)
+                await session.commit()
+        except Exception as exc:
+            result["errors"].append("报告图片渲染失败（" + type(exc).__name__ + "）")
+            # Preserve the generated interpretation when an image-only delivery cannot render.
+            if summary_text:
+                want_text = True
+                result["text_fallback"] = True
 
     # 4) 推送
     push_text = summary_text if want_text else ""
     push_image = image_path if want_image else None
 
     try:
-        send_result = await bot_module.broadcast_summary(push_text, push_image, target_type=resolved_type, target_id=resolved_target)
+        send_result = await bot_module.broadcast_summary(push_text, push_image, target_type=resolved_type, target_id=resolved_target, text_enabled=want_text)
         result["text_sent"] = send_result.get("text_sent", False)
         result["image_sent"] = send_result.get("image_sent", False)
 
@@ -194,6 +172,7 @@ async def push_report(
         await session.commit()
         result["pushed_at"] = report.pushed_at.isoformat()
 
+    result["ai_delivered"] = bool(ai_text and (result["text_sent"] or result["image_sent"]))
     result["success"] = bool(result["text_sent"] or result["image_sent"])
     if not result["success"] and not result["errors"]:
         result["errors"].append("协议端未连接，消息未发出（图片与 HTML 已生成到 data/reports/）")

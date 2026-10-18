@@ -254,7 +254,7 @@ fi
 # 兜底：即使哈希一致，也要确认核心依赖真的能导入
 # （哈希文件在、但依赖被手动删过或有损坏时，光看哈希会误判）
 if [ "$NEED_INSTALL" -eq 0 ]; then
-    if ! "$VENV_PY" -c "import nonebot, fastapi, sqlmodel, uvicorn" >/dev/null 2>&1; then
+    if ! "$VENV_PY" -c "import nonebot, fastapi, sqlmodel, uvicorn, openpyxl, defusedxml, socksio, markdown_it" >/dev/null 2>&1; then
         NEED_INSTALL=1
     fi
 fi

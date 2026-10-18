@@ -101,18 +101,7 @@
       el('div', { class: 'auth-brand' }, [
         el('div', {
           class: 'auth-logo',
-          html:
-            '<svg viewBox="0 0 48 48" width="52" height="52">' +
-            '<defs><radialGradient id="auth-glow" cx="50%" cy="50%" r="50%">' +
-            '<stop offset="0%" stop-color="#a7f3d0"/>' +
-            '<stop offset="55%" stop-color="#5eead4"/>' +
-            '<stop offset="100%" stop-color="#14b8a6"/>' +
-            '</radialGradient></defs>' +
-            '<circle cx="24" cy="24" r="13" fill="url(#auth-glow)" opacity="0.92"/>' +
-            '<circle cx="24" cy="24" r="18" fill="none" stroke="#5eead4" stroke-width="1.1" opacity="0.45"/>' +
-            '<circle cx="24" cy="24" r="22" fill="none" stroke="#5eead4" stroke-width="0.7" opacity="0.22"/>' +
-            '<ellipse cx="24" cy="24" rx="20" ry="8" fill="none" stroke="#a78bfa" stroke-width="1" opacity="0.5" transform="rotate(-28 24 24)"/>' +
-            '</svg>',
+          html: '<img src="./assets/brand/firefly-logo.jpg" alt="流萤 Logo" width="72" height="72" />',
         }),
         el('h1', { class: 'auth-title', text: '流萤 Firefly' }),
         el('p', { class: 'auth-subtitle', text: '财报总结优化 · 财税智能助手' }),

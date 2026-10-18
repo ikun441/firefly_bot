@@ -167,7 +167,14 @@
           if (payload && detailData.summary_text && !payload.summary_text) {
             payload = Object.assign({}, payload, { summary_text: detailData.summary_text });
           }
-          if (payload) payload = normalizeReportPayload(payload);
+          if (payload) {
+            if (!window.FFApi.isDebug()) {
+              const currentBudget = await api.raw('/budget-status', { query: { period: 'monthly' } });
+              if (currentBudget.success === false) throw new Error(currentBudget.message || '预算读取失败');
+              payload = Object.assign({}, payload, { budget: window.FFApi.unwrap(currentBudget), budgets: undefined });
+            }
+            payload = normalizeReportPayload(payload);
+          }
         }
       } catch (err) {
         FF.clear(body);
@@ -396,7 +403,7 @@
         const statusClass = b.status === 'over' ? 'is-over' : b.status === 'warn' ? 'is-warn' : 'is-ok';
         const barClass = b.status === 'over' ? 'is-over' : b.status === 'warn' ? 'is-warn' : '';
         const tagClass = b.status === 'over' ? 'is-danger' : b.status === 'warn' ? 'is-warning' : 'is-success';
-        const tagText = b.status === 'over' ? '已超支' : b.status === 'warn' ? '接近上限' : '正常';
+        const tagText = b.status === 'unbudgeted' ? '未设预算' : b.status === 'over' ? '已超支' : b.status === 'warn' ? '接近上限' : '正常';
 
         budgetList.appendChild(
           el('div.budget-item.' + statusClass, {}, [
@@ -418,7 +425,7 @@
               el('div.progress-bar.' + barClass, { style: { width: '0%' }, dataset: { target: Math.min(b.ratio, 100) } }),
             ]),
             el('div.field-hint', {
-              text: '执行率 ' + FF.formatPercent(b.ratio) + (b.status === 'over'
+              text: b.status === 'unbudgeted' ? '此类别尚未设置预算，已支出 ' + FF.formatMoney(b.used) : '执行率 ' + FF.formatPercent(b.ratio) + (b.status === 'over'
                 ? '，超出 ' + FF.formatMoney(b.used - b.budget, { digits: 0 })
                 : '，剩余 ' + FF.formatMoney(b.budget - b.used, { digits: 0 })),
               style: { marginTop: '7px' },
@@ -652,8 +659,16 @@
     }
 
     // 预算明细
-    if (!Array.isArray(out.budgets)) {
-      out.budgets = Array.isArray(budget.items) ? budget.items : [];
+    out.budgets = (Array.isArray(out.budgets) ? out.budgets : Array.isArray(budget.items) ? budget.items : []).map(function (item) {
+      return Object.assign({}, item, {
+        category_name: item.name || item.category_name || '总预算',
+        used: Number(item.actual !== undefined ? item.actual : item.used) || 0,
+        ratio: item.usage_ratio !== undefined ? item.usage_ratio : item.ratio,
+        status: item.state || item.status || 'ok',
+      });
+    });
+    if (budget.has_budget && !out.budgets.some(function (b) { return b.budget > 0; })) {
+      out.budgets.unshift({ category_name: '总预算', icon: '🎯', budget: budget.total_budget, used: budget.total_actual, ratio: budget.total_usage_ratio, status: budget.overall_state });
     }
 
     // 综述文本：后端在报告实体上，前端有时只拿到 payload

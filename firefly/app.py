@@ -90,6 +90,8 @@ async def lifespan(app):
 
     yield
 
+    from firefly.scheduler.tasks import shutdown_scheduler
+    shutdown_scheduler()
     await dispose_db()
     logger.info("流萤已停止。")
 
@@ -210,7 +212,9 @@ async def _on_startup() -> None:
 @_nb_driver.on_shutdown
 async def _on_shutdown() -> None:
     from firefly.db.session import dispose_db
+    from firefly.scheduler.tasks import shutdown_scheduler
 
+    shutdown_scheduler()
     await dispose_db()
     logger.info("流萤已停止。")
 

@@ -418,7 +418,7 @@ def _action_row(item: Dict[str, Any], symbol: str) -> str:
     </div>"""
 
 
-def build_report_html(report: Any, *, for_image: bool = False) -> str:
+def build_report_html(report: Any, *, for_image: bool = False, ai_summary: str = "") -> str:
     """根据 Report.payload 构建静态 HTML。
 
     Args:
@@ -426,6 +426,10 @@ def build_report_html(report: Any, *, for_image: bool = False) -> str:
         for_image: 为 True 时使用固定宽度与打印友好样式，供截图使用
     """
     config = get_config()
+    import base64
+    from ..config import INDEX_DIR
+    logo = INDEX_DIR / "assets/brand/firefly-logo.jpg"
+    logo_html = '<img alt="流萤 Logo" width="44" height="44" style="border-radius:12px;object-fit:cover;vertical-align:middle;margin-right:10px" src="data:image/jpeg;base64,' + base64.b64encode(logo.read_bytes()).decode() + '" />' if logo.is_file() else ""
     payload = report.payload or {}
     symbol = config.ledger.currency_symbol
 
@@ -555,7 +559,7 @@ def build_report_html(report: Any, *, for_image: bool = False) -> str:
         </div>
       </div>
       <div style="text-align:right;font-size:11px;color:{COLORS['text_dim']}">
-        <div style="color:{COLORS['firefly']};font-weight:600;font-size:12.5px">流萤 Firefly</div>
+        <div style="color:{COLORS['firefly']};font-weight:600;font-size:12.5px">{logo_html}流萤 Firefly</div>
         <div style="margin-top:4px">生成于 {_esc(str(generated_at)[:19].replace('T', ' '))}</div>
         <div style="margin-top:3px">耗时 {_esc(report.elapsed_ms or 0)} ms</div>
       </div>
@@ -631,7 +635,7 @@ def build_report_html(report: Any, *, for_image: bool = False) -> str:
         {f'''<table>
           <tr><td style="color:{COLORS['text_dim']}">预算合计</td><td style="text-align:right">{_money(budget.get('total_budget'), symbol)}</td></tr>
           <tr><td style="color:{COLORS['text_dim']}">已使用</td><td style="text-align:right">{_money(budget.get('total_actual'), symbol)}</td></tr>
-          <tr><td style="color:{COLORS['text_dim']}">执行率</td><td style="text-align:right;color:{COLORS['rose'] if float(budget.get('total_usage_ratio') or 0) >= 1 else COLORS['firefly']}">{_pct((budget.get('total_usage_ratio') or 0) * 100)}</td></tr>
+          <tr><td style="color:{COLORS['text_dim']}">执行率</td><td style="text-align:right;color:{COLORS['rose'] if float(budget.get('total_usage_ratio') or 0) >= 100 else COLORS['firefly']}">{_pct(budget.get('total_usage_ratio'))}</td></tr>
           <tr><td style="color:{COLORS['text_dim']}">超支类别</td><td style="text-align:right">{_esc(budget.get('over_count', 0))} 个</td></tr>
         </table>''' if budget.get('has_budget') else f'<div style="font-size:12.5px;color:{COLORS["text_dim"]};line-height:1.8">尚未设置预算。<br/>在「预算」页为常用类别设定额度后，报告会自动计算执行率并在接近上限时提醒。</div>'}
       </div>
@@ -670,6 +674,8 @@ def build_report_html(report: Any, *, for_image: bool = False) -> str:
     {f'<div style="font-size:12.5px;color:{COLORS["text_dim"]};margin:20px 0 6px">优先行动项</div>{"".join(_action_row(a, symbol) for a in action_items[:8])}' if action_items else ''}
   </div>
 
+  {f'<div class="card" data-section="ai-summary"><div class="section-title">AI 解读</div><div style="font-size:13px;line-height:1.95;white-space:pre-wrap">{_esc(ai_summary)}</div></div>' if ai_summary else ''}
+
   <!-- 摘要文本 -->
   {f'''<div class="card">
     <div class="section-title">文字摘要</div>
@@ -689,7 +695,7 @@ def build_report_html(report: Any, *, for_image: bool = False) -> str:
     return body
 
 
-async def render_report_html(report: Any) -> Path:
+async def render_report_html(report: Any, *, ai_summary: str = "", artifact_id: str = "") -> Path:
     """把报告渲染成独立 HTML 文件并返回路径。
 
     注意用的是 ``for_image=True``：这份 HTML 是给出图用的，
@@ -705,8 +711,9 @@ async def render_report_html(report: Any) -> Path:
     output_dir = DATA_DIR / "reports"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    path = output_dir / f"report_{report.id}.html"
-    path.write_text(build_report_html(report, for_image=True), encoding="utf-8")
+    suffix = "_" + artifact_id if artifact_id else ""
+    path = output_dir / f"report_{report.id}{suffix}.html"
+    path.write_text(build_report_html(report, for_image=True, ai_summary=ai_summary), encoding="utf-8")
     return path
 
 

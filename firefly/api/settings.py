@@ -37,7 +37,7 @@ async def write_settings(payload: SettingsPatch) -> Dict[str, Any]:
     """把允许修改的字段写回 config.yaml。
 
     不在白名单内的字段（如 ``llm.api_key``）会被拒绝并返回 \`\`rejected\`\` 列表，
-    以此来强制「敏感信息只走 .env」的约定。
+    密钥请在本地 config.yaml 或环境变量配置，不通过通用网页接口写入。
     """
     patch: Dict[str, Any] = dict(payload.model_dump(exclude_none=True))
 

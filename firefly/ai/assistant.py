@@ -373,7 +373,7 @@ async def _execute(session: AsyncSession, *, user_id: str, plan: Dict[str, Any],
 
         answer = (
             f"{status['period_label']}预算合计 {status['total_budget']:.2f} 元，"
-            f"已使用 {status['total_actual']:.2f} 元（{status['total_usage_ratio'] * 100:.1f}%），"
+            f"已使用 {status['total_actual']:.2f} 元（{status['total_usage_ratio']:.1f}%），"
             f"剩余 {status['total_remaining']:.2f} 元。"
         )
         if status.get("over_items"):
