@@ -72,6 +72,10 @@ QQ 的 AI 查询与分析回复会排版成 Markdown 图片，长回复分页，
 一键更新要求官方 origin、本地 main、源码无未提交改动且可以快进。配置先备份并保留，`.env` 和数据库不参与 Git 更新。更新后重启服务、刷新网页；依赖变更时使用启动脚本补齐。
 `app.debug: true` 为模拟数据演示模式，真实财务操作请关闭。
 
+## 加入社群
+<img width="1284" height="2283" alt="微信图片_20261030190348_75_72" src="https://github.com/user-attachments/assets/3307a675-106f-4986-a052-36c4174ccb11" />
+
+
 ## 文档与验证
 
 - [版本历史](./docx/version.md)
