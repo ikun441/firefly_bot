@@ -94,17 +94,14 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_handler_renders_successful_ai_and_finishes_without_duplicate_text(self):
         import nonebot
         try:nonebot.get_driver()
-        except ValueError:nonebot.init(driver='~fastapi',_env_file=None)
+        except ValueError:nonebot.init(driver="~fastapi",_env_file=None)
         from firefly.plugins import chat as plugin
-        from firefly.ai import tool_query
-        from firefly.db import session as db
-        class Scope:
-            async def __aenter__(self):return NS(commit=AsyncMock())
-            async def __aexit__(self,*args):pass
-        event=NS(get_plaintext=lambda:'ai 分析',get_session_id=lambda:'private_123',get_user_id=lambda:'123')
-        with patch.object(plugin,'_event_user',new_callable=AsyncMock,return_value=NS(id=7)),patch.object(db,'session_scope',return_value=Scope()),patch.object(tool_query,'query_with_tools',new_callable=AsyncMock,return_value={'answer':'# AI答复','engine':'llm','tools':[]}),patch('firefly.services.audit.log_action',new_callable=AsyncMock),patch.object(ai_reply,'send_ai_reply',new_callable=AsyncMock) as deliver,patch.object(plugin.record,'finish',new_callable=AsyncMock) as finish:
-            await plugin._handle_message(NS(self_id='456'),event)
-        deliver.assert_awaited_once();self.assertEqual(deliver.call_args.args[1],'# AI答复');self.assertEqual(deliver.call_args.args[0],plugin.record.send)
+        event=NS(get_plaintext=lambda:"ai 分析",get_session_id=lambda:"private_123",get_user_id=lambda:"123")
+        with patch.object(plugin,"dispatch",new_callable=AsyncMock,return_value="# AI答复"),patch.object(ai_reply,"send_ai_reply",new_callable=AsyncMock) as deliver,patch.object(plugin.record,"finish",new_callable=AsyncMock) as finish:
+            await plugin.handle_message(NS(self_id="456"),event)
+        deliver.assert_awaited_once()
+        self.assertEqual(deliver.call_args.args[1],"# AI答复")
+        self.assertEqual(deliver.call_args.args[0],plugin.record.send)
         finish.assert_awaited_once_with()
 
 

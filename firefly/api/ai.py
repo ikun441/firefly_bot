@@ -258,6 +258,18 @@ async def chat(
     session: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
     """对话式查询：函数调用 + 参数抽取，不做裸 NL2SQL。"""
+    from ..accounting.service import active_book, has_books
+    book = await active_book(session)
+    if book:
+        from ..accounting.ai import query
+        from ..ai.tool_query import explicit_question
+        question = explicit_question(payload.question)
+        # Release the legacy request session before any external model work.
+        book_id = book.id
+        await session.rollback()
+        return ok(await query(book_id, payload.question if question is None else question, payload.history))
+    if await has_books(session):
+        return fail("当前没有启用的会计账套，请先在账套管理中恢复或创建账套")
     user = await get_or_create_user(session)
 
     from ..ai.assistant import answer_question

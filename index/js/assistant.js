@@ -30,7 +30,7 @@
         el('div.page-head', {}, [
           el('h1.page-title', {}, [el('span', { text: '🔮' }), el('span', { text: '智能助手' })]),
           el('p.page-subtitle', {
-            text: '用自然语言查询账目、发现异常、获取建议。所有查询通过受控参数抽取执行，不会生成任意 SQL。',
+            text: '用自然语言查询已过账凭证、科目余额、利润与现金流。查询遵守账号权限，通过白名单工具读取数据。',
           }),
         ])
       );
@@ -46,14 +46,12 @@
       /* ---- 对话卡 ---- */
       mainColumn.appendChild(buildChatCard());
 
-      /* ---- 异常检测卡 ---- */
-      mainColumn.appendChild(await buildAnomalyCard());
-
-      /* ---- 建议采纳率卡 ---- */
-      sideColumn.appendChild(await buildAdoptionCard());
-
-      /* ---- 能力说明卡 ---- */
-      sideColumn.appendChild(buildCapabilityCard());
+      const books=(await api.raw('/v2/books')).data;
+      if(!books.length){
+        mainColumn.appendChild(await buildAnomalyCard());
+        sideColumn.appendChild(await buildAdoptionCard());
+      }
+      sideColumn.appendChild(buildCapabilityCard(books.length>0));
     },
   };
 
@@ -74,7 +72,7 @@
     });
 
     const input = el('input.input', {
-      placeholder: '例如：上月餐饮花了多少？ 本月预算还剩多少？',
+      placeholder: '例如：本月利润是多少？为什么利润和现金增加不同？',
       on: {
         keydown: function (e) {
           if (e.key === 'Enter') {
@@ -96,10 +94,10 @@
 
     const suggestions = el('div.quick-amounts', { style: { marginTop: '11px' } },
       [
-        '上月餐饮花了多少？',
-        '本期总支出是多少？',
-        '有哪些异常支出？',
-        '餐饮预算还剩多少？',
+        '上月利润是多少？',
+        '本月收入与费用是多少？',
+        '应收账款余额是多少？',
+        '为什么利润和现金增加不同？',
       ].map(function (text) {
         return el('button.quick-amount', {
           text: text,
@@ -116,7 +114,7 @@
     // 欢迎语
     appendMessage(messageList, 'assistant', {
       answer:
-        '你好，我是流萤。可以问我账目问题，也可以用受控查询帮你看预算、异常与趋势。\n试试点击下方的示例问题。',
+        '你好，我是流萤。创建会计账套后，可以查询已过账凭证、应收应付、利润和现金流。模型未配置时会明确返回规则查询结果。\n试试点击下方的示例问题。',
       isWelcome: true,
     });
 
@@ -327,7 +325,7 @@
 
     const card = el('div.card', {}, [
       el('div.card-header', {}, [
-        el('div.card-title', {}, [el('span.icon', { text: '🚨' }), el('span', { text: '异常检测' })]),
+        el('div.card-title', {}, [el('span.icon', { text: '🚨' }), el('span', { text: '历史流水异常' })]),
         el('span.tag.is-firefly', { text: 'Z-Score' }),
       ]),
       body,
@@ -559,14 +557,19 @@
   /* ============================================================
      能力说明
      ============================================================ */
-  function buildCapabilityCard() {
-    const capabilities = [
+  function buildCapabilityCard(accounting) {
+    const capabilities = accounting ? [
+      {icon:'📊',title:'财务汇总',desc:'查询指定期间收入、费用、利润、资产负债权益和现金流'},
+      {icon:'🧾',title:'凭证与科目',desc:'读取已过账凭证和科目明细，保留日期与来源口径'},
+      {icon:'🔐',title:'只读与权限',desc:'每次工具查询检查权限，AI 不能审核、过账、改删或执行 SQL'},
+      {icon:'🧭',title:'分析依据',desc:'区分收入与收款、费用与付款，模型不可用时明确返回规则结果'}
+    ] : [
       { icon: '🎯', title: '受控查询', desc: '问题被抽取为结构化参数，再走受控查询，不生成任意 SQL' },
       { icon: '🏷️', title: '智能分类', desc: 'LLM 冷启动 + 用户纠正 few-shot，越用越准' },
       { icon: '🚨', title: '异常检测', desc: '按类别计算均值与标准差，识别大额与重复记账' },
       { icon: '🧾', title: '税务风险', desc: '税负率、招待费限额、无票支出等 6 项自检' },
       { icon: '📊', title: '归因分析', desc: '瀑布图拆解支出变化，回答「涨在哪里」' },
-      { icon: '🔔', title: '主动预警', desc: '单日超限、预算临界、余额不足时推送提醒' },
+      { icon: '🔔', title: '会计账务', desc: '草稿、审核和过账分开；新账启用后旧流水预警暂停' },
     ];
 
     return el('div.card', {}, [

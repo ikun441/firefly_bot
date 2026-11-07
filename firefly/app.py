@@ -224,6 +224,10 @@ from firefly.api.router import api_router  # noqa: E402
 
 app.include_router(api_router, prefix="/api")
 
+from fastapi.exceptions import RequestValidationError
+from firefly.api.validation import validation_error_handler
+app.add_exception_handler(RequestValidationError,validation_error_handler)
+
 
 # 1.2) 登录鉴权中间件
 # 为什么不逐个路由加 Depends(require_auth)：本项目 53 个接口，
@@ -231,48 +235,16 @@ app.include_router(api_router, prefix="/api")
 # 用中间件按路径前缀统一拦截，白名单集中在 firefly/api/router.py 的 PUBLIC_PATHS，
 # **默认拒绝**而非默认放行——新接口自动受保护，漏加白名单只会「多要一次登录」，
 # 不会「把数据裸奔出去」。这个失败方向是刻意选的。
-from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
+from firefly.accounting.middleware import AccountingIdentityMiddleware
+from firefly.accounting.domain import AccountingError
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """登录态拦截中间件。
+@app.exception_handler(AccountingError)
+async def accounting_error_handler(request, exc):
+    return JSONResponse({'success': False, 'code': exc.code, 'message': str(exc)}, status_code=exc.status)
 
-    只拦截 ``/api`` 前缀且不在白名单中的请求。静态资源（``/``、
-    ``/css/*``、``/js/*``）一律放行，否则登录页自己都加载不出来。
-    实际的数据保护靠「接口全部要令牌」+「登录页本身不含任何数据」实现。
-    """
-
-    async def dispatch(self, request, call_next):  # type: ignore[no-untyped-def]
-        from firefly.api.router import _should_protect
-        from firefly.config import get_config as _get_config
-
-        cfg = _get_config()
-
-        # 鉴权未启用：直接放行，保持单机演示的零门槛体验
-        if not cfg.auth.enabled or not _should_protect(request.url.path):
-            return await call_next(request)
-
-        from firefly.api.deps import get_token_from_request
-        from firefly.services import auth as auth_service
-
-        token = get_token_from_request(request)
-        if not auth_service.verify_token(token):
-            # 返回 401 而非 200+success:false：前端拦截器据此统一跳登录页。
-            # 响应体仍是统一信封格式，便于前端复用同一套解析逻辑。
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "success": False,
-                    "message": "未登录或登录已过期，请重新登录",
-                    "code": 401,
-                },
-            )
-
-        return await call_next(request)
-
-
-app.add_middleware(AuthMiddleware)
+app.add_middleware(AccountingIdentityMiddleware)
 
 # 1.5) 交互式 API 文档
 # NoneBot 的 FastAPI driver 在构建 ASGI app 时把 docs_url / redoc_url / openapi_url

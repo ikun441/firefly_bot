@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ------------------------------------------------------------------------------
 # 路径常量
@@ -186,18 +186,23 @@ class AuthConfig(BaseModel):
        每条独立的随机 ``password_salt``）。即使 ``config.yaml`` 泄漏，
        攻击者也无法直接得到口令。
 
-    2. **默认关闭**。``enabled`` 默认为 ``False``，因为本项目是单机演示，
-       强制登录会挡住答辩现场的正常演示；用户显式开启后才生效。
-       但一旦 ``host`` 绑定到 0.0.0.0（对外暴露），启动时会强制告警。
+    2. **始终鉴权**。网页使用唯一管理员账号登录；旧配置中的关闭标志会被忽略。
 
     3. **失败锁定**。连续失败 ``max_attempts`` 次锁定 ``lockout_minutes`` 分钟，
        防止在线暴力破解。
 
     4. **会话令牌无状态校验**。令牌是 HMAC 签名的，服务端不存 session，
-       重启即全部失效（对单机演示足够，且省去一张会话表）。
+       更换签名密钥可使现有令牌全部失效，普通重启保留会话有效期。
     """
 
-    enabled: bool = False
+    enabled: bool = True
+
+    @field_validator('enabled', mode='before')
+    @classmethod
+    def require_administrator_login(cls, _value):
+        # Older config files may contain false. v2 always authenticates the sole administrator.
+        return True
+
     username: str = "admin"
     password: str = "firefly2026"
     # 以下两项由系统自动维护，不应手工填写
@@ -355,7 +360,6 @@ EDITABLE_FIELDS: set[str] = {
     # 原因：通用接口只做白名单过滤，不做强度校验，会把弱口令直接写进配置；
     # 改口令必须走 /api/auth/change-password（校验原口令 + 强度 + 恒定时间比对）。
     # 而 secret_key 若被前端覆盖，会导致所有会话莫名失效。
-    "auth.enabled",
     "auth.username",
     "auth.session_hours",
     "auth.max_attempts",

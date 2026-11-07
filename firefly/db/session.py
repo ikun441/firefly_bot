@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy import event
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -50,14 +51,26 @@ def get_engine() -> AsyncEngine:
             # SQLite 在多协程访问下需要关闭同线程检查
             connect_args={"check_same_thread": False} if url.startswith("sqlite") else {},
         )
+        if url.startswith('sqlite'):
+            @event.listens_for(_engine.sync_engine, 'connect')
+            def configure_sqlite(connection, _record):
+                cursor = connection.cursor()
+                cursor.execute('PRAGMA foreign_keys=ON')
+                cursor.execute('PRAGMA busy_timeout=15000')
+                cursor.close()
     return _engine
 
 
 async def init_db() -> None:
     """创建所有表（幂等）"""
+    from ..accounting import models as accounting_models
+    from ..accounting.migrations import upgrade
     engine = get_engine()
+    new_tables = {value.__tablename__ for value in vars(accounting_models).values() if isinstance(value, type) and getattr(value, '__tablename__', '').startswith('ff_')}
+    legacy_tables = [t for t in SQLModel.metadata.sorted_tables if t.name not in new_tables]
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(lambda c: SQLModel.metadata.create_all(c, tables=legacy_tables))
+        await conn.run_sync(upgrade)
 
 
 async def dispose_db() -> None:

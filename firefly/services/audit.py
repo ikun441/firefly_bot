@@ -42,6 +42,16 @@ async def log_action(
 
     调用方通常不关心返回值，且不应因审计失败而中断业务。
     """
+    from ..accounting.identity import current_actor
+    actor = current_actor.get()
+    if action in {"login","login_failed"}:
+        from ..accounting.identity import Actor
+        actor=Actor("admin" if action=="login" else "login",str(target_id or "未填写"),"web")
+        user_id=None
+    actual = actor.snapshot()
+    operator = actor.key
+    channel = actor.platform
+    extra = {**(extra or {}), 'actor': actual}
     entry = AuditLog(
         user_id=user_id,
         action=action,

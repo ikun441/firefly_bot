@@ -1,304 +1,421 @@
-"""协议端对话式记账与查询插件。
+"""QQ commands with live CRUD authorization and attributable accounting operations."""
 
-设计原则：**不做裸 NL2SQL**。用户的自然语言先经过 LLM 抽成结构化意图
-（``plan.intent`` + 参数），再由白名单函数 ``assistant._execute`` 执行。
-这样既可控又好解释，也不会因为一句奇怪的话把数据库读穿。
-"""
-
-from __future__ import annotations
-
-import logging
+from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
 import re
-
-from nonebot import on_command, on_message, on_startswith
-from nonebot.adapters.onebot.v11 import Bot, Event, Message, MessageSegment, PrivateMessageEvent
-
-logger = logging.getLogger("firefly.plugin")
-
-HELP_TEXT = """✨ 流萤 · 财务财税助手
-
-📝 记账
-  直接对我说：昨天打车 38，请客户吃饭 260
-  /记 餐饮 38 请客户吃饭
-  首轮离线解析后回复「接受」入账；「不接受 + 修改意见」交给 AI 重解析；「取消」放弃。
-
-📊 查询
-  上月餐饮花了多少？
-  这个月一共花了多少？
-  我的净资产是多少？
-
-📈 报告
-  /报告        生成当期报告
-  /报告 周     生成周报
-  /税检        税务风险自检
-
-⚙️ 其他
-  /明细        最近 10 笔流水
-  /预算        本月预算执行情况
-  /帮助        显示这条消息
-
-💡 查询类问题用自然语言直接问我就好。"""
+from nonebot import on_command, on_message
+from nonebot.adapters.onebot.v11 import (
+    Bot,
+    Event,
+    Message,
+    MessageSegment,
+    PrivateMessageEvent,
+)
+from ..accounting.api import transaction
+from ..accounting.identity import Actor, acting_as, require, current_actor
+from ..accounting.domain import AccountingError, minor
+from ..accounting import service as svc
+from ..accounting.models import Conversation
+from ..accounting.help import help_markdown
 
 
-# ------------------------------------------------------------------------------
-# 自然语言入口
-# ------------------------------------------------------------------------------
+def actor_for(bot, event):
+    return Actor(
+        "qq",
+        str(event.get_user_id()),
+        "qq",
+        str(getattr(event, "group_id", "")),
+        str(bot.self_id),
+    )
 
-async def _addressed(event: Event) -> bool:
+
+async def addressed(event: Event):
     from ..ai.tool_query import explicit_question
-    return isinstance(event, PrivateMessageEvent) or bool(getattr(event, "to_me", False)) or explicit_question(event.get_plaintext()) is not None
+
+    return (
+        isinstance(event, PrivateMessageEvent)
+        or bool(getattr(event, "to_me", False))
+        or explicit_question(event.get_plaintext()) is not None
+    )
 
 
-def _text(value):
+def txt(value):
     return Message(MessageSegment.text(value))
 
 
-async def _event_user(session, event):
-    from ..api.deps import get_or_create_user
-    from ..services.bot_conversation import platform_id_for_event
-    return await get_or_create_user(session, platform_id=platform_id_for_event(event))
+def session_key(bot, event):
+    return hashlib.sha256(
+        json.dumps(
+            [str(bot.self_id), event.get_session_id(), event.get_user_id()]
+        ).encode()
+    ).hexdigest()
 
 
-record = on_message(rule=_addressed, priority=20, block=True)
+async def get_book(s):
+    book = await svc.active_book(s)
+    if not book:
+        raise AccountingError("BOOK_REQUIRED", "请由管理员先在网页创建会计账套")
+    return book
+
+
+async def record_text(bot, event, text):
+    from ..ai.natural import rule_extract, refine_transactions
+
+    key = session_key(bot, event)
+    who = current_actor.get().key
+    now = datetime.now(timezone.utc)
+    refine = None
+    async with transaction() as s:
+        await require(s, "create")
+        book = await get_book(s)
+        c = await s.get(Conversation, key)
+        if c and c.owner != who:
+            raise AccountingError("FORBIDDEN", "草稿不属于当前账号", 403)
+        expiry = (
+            c.expires_at.replace(tzinfo=timezone.utc)
+            if c and c.expires_at.tzinfo is None
+            else c.expires_at
+            if c
+            else now
+        )
+        active = c and c.state == "pending" and expiry > now
+        if text in {"接受", "确认", "确认入账"}:
+            if not active:
+                return "当前没有有效待确认内容，未新增账目。"
+            draft = await svc.business_draft(
+                s, book.id, f"qq:{key}:{c.revision}", c.facts
+            )
+            c.state = "accepted"
+            s.add(c)
+            svc.event(s, "confirm_business", book_id=book.id, draft_id=draft.id)
+            return f"已保存业务草稿 #{draft.id}，待制证审核，尚未过账。"
+        if text in {"取消", "取消记账"}:
+            if c:
+                c.state = "cancelled"
+                s.add(c)
+            svc.event(s, "cancel_conversation", book_id=book.id)
+            return "已取消待确认业务，未过账。"
+        if text.startswith(("不接受", "不对")):
+            if not active:
+                return "没有可修改的有效草稿，请重新发送业务。"
+            # Persist rejection before external parsing. Revocation is checked again afterwards.
+            c.state = "refining"
+            c.revision += 1
+            s.add(c)
+            refine = (
+                c.revision,
+                c.facts.get("original", ""),
+                c.facts.get("items", []),
+                book.id,
+            )
+            svc.event(s, "reject_business", book_id=book.id, reason=text[:512])
+        else:
+            items = rule_extract(text)
+            if not items:
+                return "请补充用途与金额，例如 /记 办公费 200；或使用 /帮助。"
+            for item in items:
+                minor(str(item.get("amount")))
+            facts = {"original": text, "items": items, "source": "qq"}
+            facts = json.loads(json.dumps(facts, default=str))
+            if c is None:
+                c = Conversation(session_key=key, owner=who)
+            c.facts = facts
+            c.state = "pending"
+            c.revision += 1
+            c.expires_at = now + timedelta(minutes=15)
+            s.add(c)
+            svc.event(s, "preview_business", book_id=book.id)
+            return preview(facts)
+    if refine:
+        revision, original, items, book_id = refine
+        try:
+            corrected = await refine_transactions(original, items, [text], [])
+            for item in corrected:
+                minor(str(item.get("amount")))
+            if not corrected:
+                raise ValueError("empty result")
+        except Exception:
+            return "重新解析未完成，拒绝的草稿不会入账；请重新发送业务。"
+        async with transaction() as s:
+            await require(s, "create")
+            c = await s.get(Conversation, key)
+            if c.revision != revision or c.state != "refining":
+                return "草稿已变化，请重新发送业务。"
+            c.facts = json.loads(
+                json.dumps(
+                    {"original": original, "items": corrected, "source": "qq"},
+                    default=str,
+                )
+            )
+            c.state = "pending"
+            c.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+            s.add(c)
+            svc.event(s, "refine_business", book_id=book_id)
+            return preview(c.facts)
+
+
+def preview(facts):
+    rows = ["待确认业务（尚未制证 / 过账）"]
+    for item in facts["items"]:
+        rows.append(
+            f"{item.get('memo', '')} · {item.get('amount')} 元 · "
+            + {'expense': '支出', 'income': '收入', 'transfer': '转账'}.get(item.get('direction'), '待确认')
+        )
+    rows.append(
+        "回复「接受」保存业务草稿；「不接受 + 修改意见」重新解析；「取消」放弃。15 分钟有效。"
+    )
+    return "\n".join(rows)
+
+
+async def dispatch(bot, event, command, args):
+    with acting_as(actor_for(bot, event)):
+        async with transaction() as audit_session:
+            svc.event(audit_session,"qq_command_request",command=command)
+        if command == "记":
+            return await record_text(bot, event, args)
+        if command == "AI问询":
+            from ..accounting.ai import query
+
+            async with transaction() as s:
+                await require(s, "read")
+                book = await get_book(s)
+                book_id = book.id
+            return (await query(book_id, args))["answer"]
+        async with transaction() as s:
+            if command == "帮助":
+                return await help_markdown(s)
+            permission = (
+                "update"
+                if command in {"提交", "修改摘要"}
+                else "delete"
+                if command in {"作废", "冲销"}
+                else "admin"
+                if command in {"审核", "过账"}
+                else "read"
+            )
+            await require(s, permission)
+            book = await get_book(s)
+            if command == "明细":
+                from ..accounting.periods import parse_detail_args
+                from ..accounting.queries import list_vouchers
+
+                start, end, page = parse_detail_args(args)
+                result = await list_vouchers(
+                    s, book.id, start=start, end=end, offset=(page - 1) * 10, limit=10
+                )
+                states = {
+                    "draft": "草稿",
+                    "submitted": "待审核",
+                    "approved": "已审核",
+                    "posted": "已过账",
+                    "void": "已作废",
+                }
+                lines = [
+                    f"# 凭证明细 · {book.name}",
+                    f"{start} 至 {end} · 共 {result['total']} 张 · 第 {page} 页（每页10张，含未过账状态）",
+                    "",
+                ]
+                for v in result["rows"]:
+                    lines.append(
+                        f"- {v['accounting_date']} · #{v['id']} · {v['number'] or '未编号'} · {states[v['state']]} · {v['summary']}"
+                    )
+                if not result["rows"]:
+                    lines.append("本页没有凭证。")
+                if result["offset"] + len(result["rows"]) < result["total"]:
+                    lines.append(f"\n下一页：/明细 {start} {end} 第{page + 1}页")
+                return "\n".join(lines)
+            if command == "余额":
+                result = await svc.trial_balance(s, book.id)
+                svc.event(s, "qq_read_balances", book_id=book.id)
+                return (
+                    "科目余额（已过账）\n"
+                    + "\n".join(
+                        f"{r['code']} {r['name']} 借贷净额 {r['balance']}"
+                        for r in result["rows"]
+                        if r["balance_minor"]
+                    )
+                    + ('\n试算平衡：通过' if result['balanced'] else '\n试算平衡：不通过')
+                )
+            if command in {"报告", "查询"}:
+                from ..accounting.periods import parse_range
+
+                start, end = parse_range(args)
+                result = await svc.reports(s, book.id, start, end)
+                return report_markdown(result)
+            if command == "预算":
+                from ..accounting.budgets import overview
+                month = args.strip() or date.today().strftime("%Y-%m")
+                result = await overview(s, book.id, month)
+                rows = [f"# 费用预算 · {book.name}", f"{month} · {result['basis']}", "",
+                        f"预算合计：{result['planned']} 元；实际费用：{result['used']} 元", ""]
+                rows.extend(f"- {c['name']}：预算 {c['budget'] or '未设置'}；已用 {c['used']} 元；{c['state']}" for c in result['categories'])
+                if not result['categories']:
+                    rows.append("尚未设置费用类别，请在网页预算管理中添加。")
+                return "\n".join(rows)
+            if command == "税检":
+                return "新会计口径的税检模块尚在重构中，旧流水估算不作为会计结论。"
+            parts = args.split(maxsplit=1)
+            if not parts or not parts[0].isdigit():
+                return f"用法：/{command} 凭证ID" + (
+                    " 原因" if command == "作废" else ""
+                )
+            vid = int(parts[0])
+            v = await svc.get_voucher(s, book.id, vid)
+            reason = parts[1] if len(parts) > 1 else ""
+            if command == "冲销":
+                reverse_args = reason.split(maxsplit=1)
+                if len(reverse_args) != 2:
+                    return "用法：/冲销 凭证ID YYYY-MM-DD 原因"
+                result = await svc.reversal(
+                    s,
+                    book.id,
+                    vid,
+                    date.fromisoformat(reverse_args[0]),
+                    reverse_args[1],
+                )
+            elif command == "修改摘要":
+                if not reason:
+                    return "用法：/修改摘要 凭证ID 新摘要"
+                data = await svc.detail(s, vid, book.id)
+                result = await svc.update_voucher(
+                    s,
+                    book.id,
+                    vid,
+                    dict(
+                        accounting_date=data["accounting_date"],
+                        summary=reason,
+                        expected_version=v.version,
+                        lines=[
+                            {
+                                k: x[k]
+                                for k in [
+                                    "account_id",
+                                    "side",
+                                    "amount",
+                                    "auxiliary",
+                                    "cashflow",
+                                    "summary",
+                                    "budget_category_id",
+                                    "quantity",
+                                    "unit_price",
+                                    "unit",
+                                ]
+                            }
+                            for x in data["lines"]
+                        ],
+                    ),
+                )
+            else:
+                if command == "作废" and not reason.strip():
+                    return "请填写作废原因。"
+                actions = {
+                    "提交": "submit",
+                    "审核": "approve",
+                    "过账": "post",
+                    "作废": "void",
+                }
+                result = await svc.action(
+                    s, book.id, vid, actions[command], v.version, reason
+                )
+            return (
+                f"凭证 #{result['id']} · {result['summary']} · "
+                + {'draft': '草稿', 'submitted': '待审核', 'approved': '已审核', 'posted': '已过账', 'void': '已作废'}.get(result['state'], '处理中')
+            )
+
+
+def report_markdown(result):
+    """Human-readable statement for QQ image rendering; never expose raw objects."""
+    balance, income, cash = result["balance_sheet"], result["income_statement"], result["cash_flow"]
+    rows = [f"# 会计汇总 · {result['book']}",
+            f"{result['start']} 至 {result['end']} · 仅已过账凭证", "",
+            "## 资产负债与权益", f"- 资产：{balance['assets']} 元",
+            f"- 负债：{balance['liabilities']} 元", f"- 权益：{balance['equity']} 元",
+            "- 勾稽检查：" + ("通过" if balance["balanced"] else "不通过"), "",
+            "## 本期损益", f"- 收入：{income['income']} 元", f"- 费用：{income['expense']} 元",
+            f"- 利润：{income['profit']} 元", "", "## 现金流量",
+            f"- 资金净变动：{cash['cash_change']} 元"]
+    if cash["complete"]:
+        rows.extend(f"- {name}：{cash['items'][key]} 元" for key, name in
+                    [("operating", "经营活动"), ("investing", "投资活动"), ("financing", "筹资活动")])
+    else:
+        rows.append("部分凭证的现金流项目待补全，暂不出具完整现金流量汇总。")
+        rows.append("待检查凭证：" + "、".join(str(v) for v in cash["unclassified_voucher_ids"]))
+    if not result["opening_finalized"]:
+        rows.extend(["", "期初尚未核定，请先完成期初审核。"])
+    rows.extend(["", result["notice"]])
+    return "\n".join(rows)
+
+
+def register(name, aliases=()):
+    matcher = on_command(name, aliases=set(aliases), priority=5, block=True)
+
+    @matcher.handle()
+    async def handler(bot: Bot, event: Event):
+        raw = event.get_plaintext().strip()
+        args = re.sub(r"^/?\S+\s*", "", raw, count=1)
+        try:
+            result = await dispatch(bot, event, name, args)
+        except (AccountingError, ValueError) as exc:
+            result = str(exc)
+        # finish raises FinishedException; do not put it in the rendering try block.
+        if name in {"帮助", "明细", "报告", "预算", "AI问询"}:
+            from ..render.ai_reply import send_ai_reply
+
+            await send_ai_reply(
+                matcher.send,
+                result,
+                title={
+                    "帮助": "流萤 · 命令帮助",
+                    "明细": "流萤 · 凭证明细",
+                    "报告": "流萤 · 会计报告",
+                }.get(name, "流萤 · 会计问询"),
+            )
+            await matcher.finish()
+        else:
+            await matcher.finish(txt(result))
+
+    return matcher
+
+
+cmd_ai = register("AI问询", ("ai", "AI"))
+cmd_help = register("帮助", ("help", "菜单"))
+cmd_record = register("记", ("记账", "record"))
+cmd_list = register("明细", ("流水", "list"))
+cmd_balance = register("余额")
+cmd_report = register("报告", ("report", "报表"))
+cmd_submit = register("提交")
+cmd_edit = register("修改摘要")
+cmd_void = register("作废")
+cmd_reverse = register("冲销")
+cmd_review = register("审核")
+cmd_post = register("过账")
+cmd_taxcheck = register("税检", ("tax",))
+cmd_budget = register("预算", ("budget",))
+
+record = on_message(rule=addressed, priority=20, block=True)
 
 
 @record.handle()
-async def _handle_message(bot: Bot, event: Event) -> None:
-    from ..ai.assistant import answer_question
-    from ..db.session import session_scope
-    from ..services import bot_conversation, audit
-    from ..ai.tool_query import explicit_question, query_with_tools
+async def handle_message(bot: Bot, event: Event):
     text = event.get_plaintext().strip()
     if not text or text.startswith("/"):
         return
-    ai_reply = False
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        key = bot_conversation.conversation_key(bot.self_id, event.get_session_id(), event.get_user_id())
-        explicit = explicit_question(text)
-        if explicit is not None:
-            result = await query_with_tools(session, user_id=user.id, question=explicit)
-            reply = result["answer"]
-            ai_reply = result.get("engine") == "llm"
-            await audit.log_action(session, "ai_read_query", user_id=user.id, target_type="ai", channel="bot", detail=explicit[:120], extra={"tools": result.get("tools"), "read_only": True})
-        else:
-            try:
-                reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
-            except ValueError as exc:
-                await session.rollback()
-                reply = f"未入账：{exc}。请取消本轮并重新发送记账内容。"
-        if reply is None:
-            result = await answer_question(session, user_id=user.id, question=text)
-            reply = result.get("answer") or "请使用 /帮助 查看用法。"
-            ai_reply = result.get("engine") == "llm" or result.get("analysis_engine") == "llm"
-            await audit.log_action(session, "ai_chat", user_id=user.id, target_type="ai", operator="ai", channel="bot", detail=text[:120], extra={"intent": result.get("intent"), "tools": result.get("tools")})
-        await session.commit()
-    if ai_reply:
+    with acting_as(actor_for(bot, event)):
+        try:
+            from ..ai.tool_query import explicit_question
+
+            question = explicit_question(text)
+            if question is not None:
+                reply = await dispatch(bot, event, "AI问询", question)
+            else:
+                reply = await record_text(bot, event, text)
+        except (AccountingError, ValueError) as exc:
+            reply = str(exc)
+    if question is not None:
         from ..render.ai_reply import send_ai_reply
+
         await send_ai_reply(record.send, reply)
-        # finish stays outside render/send exception handling (no duplicate fallback replies).
         await record.finish()
-        return
-    await record.finish(_text(reply))
-
-
-cmd_record = on_command("记", aliases={"记账", "record"}, priority=5, block=True)
-
-
-@cmd_record.handle()
-async def _cmd_record(bot: Bot, event: Event) -> None:
-    from ..db.session import session_scope
-    from ..services import bot_conversation, ledger
-    text = re.sub(r"^/?(?:记账|record|记)\s*", "", event.get_plaintext().strip(), count=1)
-    if not text:
-        await cmd_record.finish(_text("用法：/记 餐饮 38 请客户吃饭；结果需回复接受后才入账。"))
-        return
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        category = await ledger.get_category_by_name(session, user_id=user.id, name=text.split()[0])
-        if category and category.direction == "income":
-            text = "收入 " + text
-        key = bot_conversation.conversation_key(bot.self_id, event.get_session_id(), event.get_user_id())
-        reply = await bot_conversation.handle_message(session, user_id=user.id, key=key, text=text)
-        await session.commit()
-    await cmd_record.finish(_text(reply or "请补充类别和金额。"))
-
-
-# ------------------------------------------------------------------------------
-# 命令：/报告 [日|周|月|季|年]
-# ------------------------------------------------------------------------------
-
-cmd_report = on_command("报告", aliases={"report", "报表"}, priority=5, block=True)
-
-
-@cmd_report.handle()
-async def _cmd_report(bot: Bot, event: Event) -> None:
-    from ..db.session import session_scope
-    from ..services import report as report_service
-    from ..api.deps import get_or_create_user
-
-    text = event.get_plaintext()
-    period = "monthly"
-    if "周" in text:
-        period = "weekly"
-    elif "季" in text:
-        period = "quarterly"
-    elif "年" in text:
-        period = "yearly"
-    elif "日" in text or "天" in text:
-        period = "daily"
-
-    await cmd_report.send(Message("⏳ 正在生成报告，请稍候…"))
-
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        report = await report_service.generate_report(
-            session, user_id=user.id, period=period, persist=True, channel="bot"
-        )
-
-    if report.status != "completed":
-        await cmd_report.finish(Message(f"❌ 报告生成失败：{report.error_message or '未知错误'}"))
-        return
-
-    # 试着出一张图，失败就发文字摘要
-    try:
-        from nonebot.adapters.onebot.v11 import MessageSegment
-
-        from ..render.html import render_report_html
-        from ..render.image import render_html_to_image
-
-        html_path = await render_report_html(report)
-        image_path = await render_html_to_image(html_path.read_text(encoding="utf-8"))
-        await cmd_report.finish(Message(MessageSegment.image(image_path.resolve().as_uri())))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("报告出图失败: %s", exc)
-        await cmd_report.finish(Message(report.summary_text or "报告已生成，可在网页查看。"))
-
-
-# ------------------------------------------------------------------------------
-# 命令：/税检
-# ------------------------------------------------------------------------------
-
-cmd_taxcheck = on_command("税检", aliases={"税务自检", "tax"}, priority=5, block=True)
-
-
-@cmd_taxcheck.handle()
-async def _cmd_taxcheck(bot: Bot, event: Event) -> None:
-    from ..db.session import session_scope
-    from ..services import ledger as ledger_service
-    from ..services import taxcheck
-    from ..api.deps import get_or_create_user
-
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        start, end = ledger_service.period_bounds("monthly")
-        result = await taxcheck.run_tax_check(session, user_id=user.id, start=start, end=end)
-        await session.commit()
-
-    labels = {"high": "🔴 高风险", "medium": "🟡 中风险", "low": "🔵 低风险", "info": "ℹ️ 提示"}
-    lines = ["🧾 税务风险自检", f"综合等级：{labels.get(result['highest_level'], 'ℹ️ 提示')}"]
-
-    optimizations = result.get("optimizations") or []
-    if not optimizations:
-        lines.append("\n本期未发现明显税务风险，保持现状即可。")
     else:
-        for item in optimizations[:5]:
-            lines.append(
-                f"\n{labels.get(item['level'], '')} {item['title']}\n"
-                f"  {item['description']}\n"
-                f"  → {item['suggestion']}"
-            )
-
-    if result.get("disclaimer"):
-        lines.append(f"\n{result['disclaimer']}")
-    await cmd_taxcheck.finish(_text("\n".join(lines)))
-
-
-# ------------------------------------------------------------------------------
-# 命令：/明细
-# ------------------------------------------------------------------------------
-
-cmd_list = on_command("明细", aliases={"list", "流水"}, priority=5, block=True)
-
-
-@cmd_list.handle()
-async def _cmd_list(bot: Bot, event: Event) -> None:
-    from ..db.session import session_scope
-    from ..services import ledger as ledger_service
-    from ..api.deps import get_or_create_user
-
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        items = await ledger_service.list_transactions(
-            session, user_id=user.id, limit=10, order_desc=True
-        )
-
-    lines = ["📒 最近 10 笔流水"]
-    if not items:
-        lines.append("还没有记账记录。对我说「今天午饭 25」试试。")
-    for txn in items:
-        sign = "＋" if txn.direction == "income" else "－"
-        memo = f" {txn.memo}" if txn.memo else ""
-        lines.append(f"{txn.trade_time.strftime('%m-%d %H:%M')} {sign}{txn.amount:.2f}{memo}")
-
-    await cmd_list.finish(_text("\n".join(lines)))
-
-
-# ------------------------------------------------------------------------------
-# 命令：/预算
-# ------------------------------------------------------------------------------
-
-cmd_budget = on_command("预算", aliases={"budget"}, priority=5, block=True)
-
-
-@cmd_budget.handle()
-async def _cmd_budget(bot: Bot, event: Event) -> None:
-    from ..db.session import session_scope
-    from ..services import budget as budget_service
-    from ..services import ledger as ledger_service
-    from ..api.deps import get_or_create_user
-
-    async with session_scope() as session:
-        user = await _event_user(session, event)
-        start, end = ledger_service.period_bounds("monthly")
-        status = await budget_service.get_budget_status(
-            session, user_id=user.id, start=start, end=end, period="monthly"
-        )
-
-    if not status["has_budget"]:
-        await cmd_budget.finish(Message("本月还没设置预算，可以在网页的「预算」页添加。"))
-        return
-
-    lines = [
-        f"💰 本月预算 {status['total_budget']:.2f} 元",
-        f"已用 {status['total_actual']:.2f} 元（{status['total_usage_ratio'] * 100:.1f}%）",
-        f"剩余 {status['total_remaining']:.2f} 元",
-    ]
-    for item in status["items"]:
-        if item["state"] in ("over", "warn"):
-            lines.append(
-                f"{'🔴' if item['state'] == 'over' else '🟡'} "
-                f"{item['name']} {item['usage_ratio'] * 100:.0f}%"
-            )
-
-    await cmd_budget.finish(_text("\n".join(lines)))
-
-
-# ------------------------------------------------------------------------------
-# 命令：/帮助 与 打招呼
-# ------------------------------------------------------------------------------
-
-cmd_help = on_command("帮助", aliases={"help", "菜单"}, priority=5, block=True)
-
-
-@cmd_help.handle()
-async def _cmd_help(bot: Bot, event: Event) -> None:
-    await cmd_help.finish(Message(HELP_TEXT))
-
-
-greet = on_startswith(("你好", "hi", "hello", "在吗"), ignorecase=True, priority=30, block=False)
-
-
-@greet.handle()
-async def _greet(bot: Bot, event: Event) -> None:
-    await greet.finish(Message("你好呀，我是流萤 ✨\n" + HELP_TEXT))
+        await record.finish(txt(reply))

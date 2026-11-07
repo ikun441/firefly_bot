@@ -281,29 +281,20 @@ class RegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_onebot_handler_queries_and_confirms_without_at(self):
         import nonebot
-        try:
-            nonebot.get_driver()
-        except ValueError:
-            nonebot.init(driver="~fastapi", _env_file=None)
-        from nonebot.adapters.onebot.v11 import PrivateMessageEvent, Message
+        try: nonebot.get_driver()
+        except ValueError: nonebot.init(driver="~fastapi", _env_file=None)
         from firefly.plugins import chat as plugin
+        from nonebot.adapters.onebot.v11 import PrivateMessageEvent, Message
         from types import SimpleNamespace
-        settings.get_config().onebot.superusers = ["123"]
-        def event(text):
-            return PrivateMessageEvent.model_validate({"time": 1, "self_id": 456, "post_type": "message", "message_type": "private", "sub_type": "friend", "user_id": 123, "message_id": 7, "message": Message(text), "original_message": Message(text), "raw_message": text, "font": 0, "sender": {"user_id": 123, "nickname": "test"}, "to_me": False})
-        fake_bot = SimpleNamespace(self_id="456")
-        self.assertTrue(await plugin._addressed(event("查询最近10笔流水")))
-        with patch.object(plugin.record, "finish", new_callable=AsyncMock) as finish, patch.object(assistant, "answer_question", new_callable=AsyncMock, return_value={"answer": "当前支出 0 元", "intent": "sum_total", "tools": ["sum_total"]}) as query:
-            await plugin._handle_message(fake_bot, event("查询最近10笔流水"))
-            self.assertEqual(query.call_args.kwargs["user_id"], self.user_id)
-            self.assertIn("当前支出", str(finish.call_args.args[0]))
-            self.assertEqual(finish.call_args.args[0][0].type, "text")
-        with patch.object(plugin.record, "finish", new_callable=AsyncMock) as finish:
-            await plugin._handle_message(fake_bot, event("打车38元"))
-            self.assertIn("离线规则", str(finish.call_args.args[0]))
-            self.assertEqual((await self.records())["total"], 0)
-            await plugin._handle_message(fake_bot, event("接受"))
-            self.assertEqual((await self.records())["total"], 1)
+        def event(value):
+            return PrivateMessageEvent.model_validate({"time":1,"self_id":456,"post_type":"message","message_type":"private","sub_type":"friend","user_id":123,"message_id":7,"message":Message(value),"original_message":Message(value),"raw_message":value,"font":0,"sender":{"user_id":123}})
+        self.assertTrue(await plugin.addressed(event("查询最近10笔凭证")))
+        # Configuration owners no longer bypass database grants.
+        settings.get_config().onebot.superusers=["123"]
+        with patch.object(plugin.record,"finish",new_callable=AsyncMock) as finish:
+            await plugin.handle_message(SimpleNamespace(self_id="456"),event("办公费38元"))
+            self.assertIn("没有执行此操作的权限",str(finish.call_args.args[0]))
+        self.assertEqual((await self.records())["total"],0)
     async def test_qq_invalid_amounts_never_create_a_confirmable_draft(self):
         for text in ["打车 0 元", "打车 -3 元", "打车 100000001 元", "打车 1.234 元", "2026-99-99 打车 12 元"]:
             await self.send(text)

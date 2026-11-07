@@ -87,8 +87,8 @@ def _split_png(path: Path, max_height: int) -> list[bytes]:
     return pages
 
 
-async def render_ai_reply(markdown: str) -> list[bytes]:
-    document = build_ai_reply_html(markdown)
+async def render_ai_reply(markdown: str, *, title: str = '流萤 · AI 回复') -> list[bytes]:
+    document = build_ai_reply_html(markdown, title=title)
     limit = min(6000, max(1000, get_config().push.image_max_height or 6000))
     # No financial reply files are retained after rendering (including error paths).
     with tempfile.TemporaryDirectory(prefix="firefly-ai-reply-") as directory:
@@ -108,13 +108,13 @@ def _text_chunks(text: str, limit: int = 3500):
         text = text[cut:]
 
 
-async def send_ai_reply(send: Callable[..., Awaitable], markdown: str) -> dict:
+async def send_ai_reply(send: Callable[..., Awaitable], markdown: str, *, title: str | None = None) -> dict:
     """Use the matcher's sender so the response returns to the exact original session."""
     from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
     result = {"images_sent": 0, "text_fallback": False}
     try:
-        pages = await render_ai_reply(markdown)
+        pages = await render_ai_reply(markdown, title=title) if title else await render_ai_reply(markdown)
         if not pages:
             raise ValueError("No AI reply pages rendered")
         for page in pages:

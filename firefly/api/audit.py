@@ -40,7 +40,8 @@ async def list_logs(
         session, user_id=user.id, action=action, channel=channel, target_type=target_type, target_id=target_id
     )
 
-    return ok([to_dict(log) for log in logs], total=total, limit=limit, offset=offset)
+    from ..accounting.operations import legacy_view
+    return ok([{**to_dict(log), **legacy_view(log)} for log in logs], total=total, limit=limit, offset=offset)
 
 
 @router.get("/audit/stats")
@@ -100,7 +101,7 @@ async def resolve_suggestion(
     session: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
     """用户采纳 / 拒绝一条 AI 建议 —— 采纳率指标的唯一样本写入点。"""
-    user = await get_or_create_user(session)
+    await get_or_create_user(session)
 
     suggestion = await audit_service.resolve_suggestion(
         session, suggestion_id, adopted=payload.adopted, channel=payload.channel

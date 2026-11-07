@@ -44,6 +44,8 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -376,6 +378,16 @@ class ApiTester:
         # 因此这里按「测试专用前缀」兜底清扫。前缀统一用 __测试 开头，
         # 业务数据不会长这样，误删风险可忽略。
         async with session_scope() as session:
+            # Report generation also creates tax-check rows. Remove only children
+            # of reports explicitly created by this test run, preserving baseline rows.
+            report_ids = self.snapshot.created.get("ff_report") or []
+            for report_id in report_ids:
+                candidates = (await session.execute(
+                    text("SELECT id FROM ff_tax_check WHERE report_id=:rid"), {"rid": report_id}
+                )).all()
+                for (check_id,) in candidates:
+                    if check_id not in self.snapshot.existing.get("ff_tax_check", set()):
+                        await session.execute(text("DELETE FROM ff_tax_check WHERE id=:id"), {"id": check_id})
             for table, column in TEST_MARKERS:
                 result = await session.execute(
                     text(f"DELETE FROM {table} WHERE {column} LIKE :marker"),
@@ -403,7 +415,7 @@ class ApiTester:
         # 还原口令（若测试过程中改过）
         try:
             from firefly.services import auth as auth_service
-            from firefly.config import get_config, load_config
+            from firefly.config import get_config
 
             cfg = get_config()
             if not auth_service.verify_password(
@@ -632,7 +644,7 @@ class ApiTester:
             )
             raw = json.dumps(d, ensure_ascii=False)
             # 真实密钥绝不能在响应正文里出现
-            from firefly.config import get_config, load_config
+            from firefly.config import get_config
 
             cfg = get_config()
             hard = cfg.auth.secret_key and cfg.auth.secret_key in raw
@@ -1099,7 +1111,8 @@ class ApiTester:
             if not cat:
                 return expect(False, "无可用支出类别")
 
-            # 预算 1 元 + 一笔 500 元支出 → 必然 over
+            from firefly.config import get_config
+            # 预算 1 元 + 当前月一笔 500 元支出 → 必然 over
             b = await self.post(
                 "/api/budgets",
                 json_body={
@@ -1118,7 +1131,7 @@ class ApiTester:
                     "direction": "expense",
                     "category_id": cat["id"],
                     "memo": "__预算超支测试",
-                    "trade_time": "2026-10-07 10:00",
+                    "trade_time": datetime.now(ZoneInfo(get_config().app.timezone)).strftime("%Y-%m-%d %H:%M:%S"),
                 },
             )
             tid = txn_of(t.json()).get("id")
@@ -1561,7 +1574,6 @@ class ApiTester:
 
         import random as _random
         import string as _string
-        import time as _time
 
         _seq = [0]
 
@@ -1604,7 +1616,7 @@ class ApiTester:
                 "2026-10-12 11:00:00,零钱提现,/,提现到银行卡,不计收支,¥500.00,零钱,提现已到账\n"
             ).encode("utf-8")
 
-        CSV = build_csv()
+        _unused_csv = build_csv()
 
         async def _dry_run():
             """dry_run 只解析不入库 —— 导错账要一条条删，预览成本远低于回滚。"""
@@ -1864,7 +1876,7 @@ class ApiTester:
 
         async def _latest_no_target():
             resp = await self.post("/api/push/latest", json_body={})
-            body = resp.json()
+            resp.json()
             return expect(resp.status_code < 500, f"HTTP {resp.status_code}")
 
         await r.case("POST /api/push/latest 不抛异常", _latest_no_target())

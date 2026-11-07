@@ -8,6 +8,7 @@
 前端弹窗确认只能挡住误点，挡不住脚本直接打接口；
 多一个必填字段让「误触还原」在协议层就不可能发生。
 """
+
 from __future__ import annotations
 
 import json
@@ -63,23 +64,25 @@ async def create_backup(
     user=Depends(current_user),
 ) -> Dict[str, Any]:
     """立即生成一份备份文件。"""
-    path = await backup_service.create_backup_file(
-        session, note=f"手动备份（用户 {user.nickname or user.id}）"
-    )
-    # 顺手清理过期的自动安全备份，避免目录无限膨胀
-    removed = backup_service.cleanup_auto_backups()
+    from ..accounting.api import transaction
 
-    await log_action(
-        session,
-        action="backup_create",
-        user_id=user.id,
-        target_type="backup",
-        target_id=path.name,
-        operator="user",
-        detail=f"生成备份 {path.name}",
-        channel="web",
-    )
+    user_id, nickname = user.id, user.nickname
     await session.commit()
+    async with transaction() as snapshot:
+        path = await backup_service.create_backup_file(
+            snapshot, note=f"手动备份（用户 {nickname or user_id}）"
+        )
+        await log_action(
+            snapshot,
+            action="backup_create",
+            user_id=user_id,
+            target_type="backup",
+            target_id=path.name,
+            operator="user",
+            detail=f"生成备份 {path.name}",
+            channel="web",
+        )
+    removed = backup_service.cleanup_auto_backups()
 
     stat = path.stat()
     return ok(

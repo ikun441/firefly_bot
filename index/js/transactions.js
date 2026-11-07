@@ -69,9 +69,8 @@
           if (!rows.length) logs.appendChild(el('p.field-hint', { text: '暂无操作记录。历史版本的日志可能没有修改前后的快照。' }));
           rows.forEach(function (log) {
             logs.appendChild(el('details.transaction-log', {}, [
-              el('summary', { text: FF.formatDate(log.created_at, 'YYYY-MM-DD HH:mm') + ' · ' + log.action + ' · #' + (log.target_id || '批次') + ' · ' + log.channel + ' · ' + log.operator }),
-              el('p', { text: log.detail || '' }),
-              el('pre', { text: JSON.stringify(log.extra || {}, null, 2) }),
+              el('summary', { text: FF.formatDate(log.created_at, 'YYYY-MM-DD HH:mm') + ' · ' + (log.title || '流水操作') + ' · #' + (log.target_id || '批次') + ' · ' + (log.platform_name || '网页端') + ' · ' + (log.operator_name || '管理员') }),
+              el('p', { text: log.description || log.detail || '操作已记录' }),
             ]));
           });
           logs.appendChild(pager(logPage, envelope.total || 0, logSize, function (value) { logPage = value; loadLogs(); }));

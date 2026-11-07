@@ -163,6 +163,9 @@ async def create_transaction(
 
     金额统一取绝对值存储，方向由 direction 表达，避免正负号在聚合时出错。
     """
+    from ..accounting.service import has_books
+    if await has_books(session):
+        raise ValueError('会计账套已启用，历史流水只读，请创建会计业务草稿或凭证')
     txn = Transaction(
         user_id=user_id,
         amount=abs(float(amount)),
@@ -202,6 +205,9 @@ async def update_transaction(
     **fields: Any,
 ) -> Optional[Transaction]:
     """更新流水字段（白名单）"""
+    from ..accounting.service import has_books
+    if await has_books(session):
+        raise ValueError('会计账套已启用，历史流水不可修改')
     txn = await get_transaction(session, txn_id, user_id)
     if txn is None:
         return None
@@ -238,6 +244,9 @@ async def delete_transaction(
     session: AsyncSession, txn_id: int, user_id: Optional[int] = None
 ) -> bool:
     """删除流水"""
+    from ..accounting.service import has_books
+    if await has_books(session):
+        raise ValueError('会计账套已启用，历史流水不可删除')
     txn = await get_transaction(session, txn_id, user_id)
     if txn is None:
         return False

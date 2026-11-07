@@ -132,19 +132,16 @@ class ToolCallingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['engine'],'unavailable')
     async def test_explicit_ai_bypasses_pending_bookkeeping(self):
         import nonebot
-        try:nonebot.get_driver()
-        except ValueError:nonebot.init(driver='~fastapi',_env_file=None)
-        from nonebot.adapters.onebot.v11 import PrivateMessageEvent, Message
+        try: nonebot.get_driver()
+        except ValueError: nonebot.init(driver="~fastapi", _env_file=None)
         from firefly.plugins import chat as plugin
-        from firefly.services import bot_conversation
-        from firefly.db import session as db
-        class Scope:
-            async def __aenter__(self):return NS(commit=AsyncMock())
-            async def __aexit__(self,*args):pass
-        event=PrivateMessageEvent.model_validate({'time':1,'self_id':456,'post_type':'message','message_type':'private','sub_type':'friend','user_id':123,'message_id':7,'message':Message('ai 接受，帮我记账38元'),'original_message':Message('ai 接受，帮我记账38元'),'raw_message':'ai 接受，帮我记账38元','font':0,'sender':{'user_id':123}})
-        with patch.object(plugin,'_event_user',new_callable=AsyncMock,return_value=NS(id=7)),patch.object(db,'session_scope',return_value=Scope()),patch.object(tool_query,'query_with_tools',new_callable=AsyncMock,return_value={'answer':'只允许查询','tools':[]}) as query,patch.object(bot_conversation,'handle_message',new_callable=AsyncMock) as book,patch.object(plugin.record,'finish',new_callable=AsyncMock),patch('firefly.services.audit.log_action',new_callable=AsyncMock):
-            await plugin._handle_message(NS(self_id='456'),event)
-        query.assert_awaited_once();book.assert_not_called()
+        from firefly.render import ai_reply
+        event=NS(get_plaintext=lambda:"ai 接受，帮我记账38元",get_session_id=lambda:"private_123",get_user_id=lambda:"123")
+        with patch.object(plugin,"dispatch",new_callable=AsyncMock,return_value="只读回答") as query,patch.object(plugin,"record_text",new_callable=AsyncMock) as write,patch.object(plugin.record,"finish",new_callable=AsyncMock),patch.object(ai_reply,"send_ai_reply",new_callable=AsyncMock):
+            await plugin.handle_message(NS(self_id="456"),event)
+        query.assert_awaited_once()
+        self.assertEqual(query.call_args.args[2],"AI问询")
+        write.assert_not_called()
 
 class ToolAPIIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

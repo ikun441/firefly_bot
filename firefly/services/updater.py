@@ -96,9 +96,13 @@ async def pull_update(root: Path = BASE_DIR, data_dir: Path = DATA_DIR) -> dict[
         with backup.open('xb') as out:
             os.chmod(backup, 0o600); out.write(original)
         try:
-            await _git(root, 'restore', '--', 'config.yaml')
+            tracked, _ = await _git(root, 'ls-files', '--error-unmatch', 'config.yaml', check=False)
+            if tracked == 0:
+                await _git(root, 'restore', '--', 'config.yaml')
             await _git(root, 'merge', '--ff-only', 'FETCH_HEAD')
-            upstream = yaml.safe_load(path.read_bytes()) or {}
+            template = path if path.exists() else root / 'config.example.yaml'
+            upstream = yaml.safe_load(template.read_bytes()) if template.exists() else {}
+            upstream = upstream or {}
             config = _merge_config(upstream, local)
             config.setdefault('app', {})['version'] = (upstream.get('app') or {}).get('version', installed_version(root))
             temp = path.with_suffix('.yaml.tmp')

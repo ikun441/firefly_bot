@@ -180,6 +180,9 @@ async def run_due_subscriptions(
     幂等保证：处理完一条就把 ``next_run_date`` 推到下一个未来日期，
     所以同一天重复调用不会重复入账。
     """
+    from ..accounting.service import has_books
+    if await has_books(session):
+        return {'processed': 0, 'created': [], 'message': '会计账套已启用，旧订阅暂停；需转换为周期业务模板'}
     current = today or _today()
 
     statement = select(Subscription).where(

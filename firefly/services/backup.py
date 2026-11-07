@@ -21,19 +21,22 @@ JSON 是逻辑层导出，只要 MySQL/SQLite 能读出 ORM 对象就能生成�
 代价是体积大一些、丢失索引定义——但本项目的数据量（个人/小微企业账目）
 完全在承受范围内。
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ..config import BASE_DIR
+from ..config import DATA_DIR
 from ..db.models import (
     Account,
+    BotDraft,
     AuditLog,
     Budget,
     Category,
@@ -55,7 +58,7 @@ from ..db.models import (
 # 导出/导入顺序：**父表在前，子表在后**。
 # 导入时必须先插父表，否则外键约束（若启用）会失败；
 # 删除时必须反过来，先删子表再删父表。
-BACKUP_TABLES: List[Tuple[str, Type[Any]]] = [
+LEGACY_BACKUP_TABLES: List[Tuple[str, Type[Any]]] = [
     ("users", User),
     ("accounts", Account),
     ("categories", Category),
@@ -71,6 +74,36 @@ BACKUP_TABLES: List[Tuple[str, Type[Any]]] = [
     ("system_states", SystemState),
 ]
 
+from ..accounting import models as accounting_models
+
+LEGACY_BACKUP_TABLES.append(("bot_drafts", BotDraft))
+ACCOUNTING_BACKUP_TABLES = [
+    ("access_control", accounting_models.AccessControl),
+    ("qq_grants", accounting_models.QQGrant),
+    ("books", accounting_models.Book),
+    ("periods", accounting_models.Period),
+    ("chart_accounts", accounting_models.ChartAccount),
+    ("expense_categories", accounting_models.ExpenseCategory),
+    ("expense_budgets", accounting_models.ExpenseBudget),
+    ("vouchers", accounting_models.Voucher),
+    ("voucher_lines", accounting_models.VoucherLine),
+    ("accounting_events", accounting_models.AccountingEvent),
+    ("command_receipts", accounting_models.CommandReceipt),
+    ("business_drafts", accounting_models.BusinessDraft),
+    ("accounting_conversations", accounting_models.Conversation),
+    ("reconciliations", accounting_models.Reconciliation),
+]
+BACKUP_TABLES = LEGACY_BACKUP_TABLES + ACCOUNTING_BACKUP_TABLES
+
+
+def tables_digest(tables):
+    """Detect accidental changes; this checksum is not an authenticity signature."""
+    raw = json.dumps(
+        tables, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
 # 系统状态表里这些键属于**运行时状态**，不是用户数据。
 # 还原时把它们排除掉：否则「今天已经发过预警」这类标记会被一起回滚，
 # 导致还原当天重复推送预警。
@@ -80,8 +113,8 @@ SYSTEM_STATE_SKIP_KEYS = {
     "last_subscription_run",
 }
 
-BACKUP_VERSION = 1
-BACKUP_DIR = BASE_DIR / "data" / "backups"
+BACKUP_VERSION = 3
+BACKUP_DIR = DATA_DIR / "backups"
 AUTO_BACKUP_KEEP = 5  # 自动安全备份保留份数，避免无限增长
 
 
@@ -96,7 +129,7 @@ def _now() -> datetime:
 
 def _stamp() -> str:
     """文件名用的时间戳（本地可读）。"""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def _serialize(value: Any) -> Any:
@@ -106,7 +139,7 @@ def _serialize(value: Any) -> Any:
     还原时用 ``datetime.fromisoformat`` 就能读回来，
     且不会丢时区信息——丢了时区会在写库时被 SQLModel 拒绝。
     """
-    if isinstance(value, datetime):
+    if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
 
@@ -162,6 +195,9 @@ async def build_backup(
         payload["counts"][name] = len(dicts)
 
     payload["total_rows"] = sum(payload["counts"].values())
+    payload["sha256"] = tables_digest(payload["tables"])
+    payload["schema_revision"] = "0004_books"
+    payload["recovery"] = "isolated_database_only"
     return payload
 
 
@@ -187,6 +223,7 @@ async def create_backup_file(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    path.chmod(0o600)
     return path
 
 
@@ -194,7 +231,9 @@ def make_auto_backup_sync_name() -> str:
     return f"auto_before_restore_{_stamp()}.json"
 
 
-def cleanup_auto_backups(directory: Optional[Path] = None, keep: int = AUTO_BACKUP_KEEP) -> int:
+def cleanup_auto_backups(
+    directory: Optional[Path] = None, keep: int = AUTO_BACKUP_KEEP
+) -> int:
     """只保留最近 ``keep`` 份自动备份，返回删除数量。
 
     只清理 ``auto_before_restore_`` 前缀的：用户手动备份的文件
@@ -237,37 +276,48 @@ def validate_backup(data: Any) -> Tuple[bool, str]:
         return False, "这不是流萤的备份文件（缺少 format 标识）"
 
     version = data.get("version")
-    if not isinstance(version, int):
-        return False, "备份缺少版本号"
-    if version > BACKUP_VERSION:
-        return False, (
-            f"备份版本 v{version} 高于当前程序支持的 v{BACKUP_VERSION}，"
-            "请升级程序后再还原"
-        )
-
+    if type(version) is not int or version not in {1, 2, BACKUP_VERSION}:
+        return False, "不支持的备份版本，请使用匹配版本的程序"
     tables = data.get("tables")
     if not isinstance(tables, dict):
         return False, "备份缺少 tables 数据"
-
-    known = {name for name, _ in BACKUP_TABLES}
-    missing = known - set(tables.keys())
+    known = {
+        name for name, _ in (BACKUP_TABLES if version >= 2 else LEGACY_BACKUP_TABLES)
+    }
+    if version==2:known -= {"expense_categories","expense_budgets"}
+    required = known if version >= 2 else known - {"bot_drafts"}
+    missing = required - set(tables)
     if missing:
-        # 缺表不算致命：早期版本的备份可能没有后加的表。
-        # 但必须告知，让用户知道这些数据不会被还原。
-        return True, "备份缺少部分数据表：" + "、".join(sorted(missing)) + "（这些表将保持现状）"
-
-    for name in known:
-        if not isinstance(tables[name], list):
-            return False, f"备份里 {name} 不是列表，文件可能已损坏"
-
-    return True, "结构校验通过"
+        return False, "备份缺少必要数据表：" + "、".join(sorted(missing))
+    for name in known & set(tables):
+        if not isinstance(tables[name], list) or any(
+            not isinstance(row, dict) for row in tables[name]
+        ):
+            return False, f"备份里 {name} 应为对象列表"
+    if version >= 2:
+        if set(tables) != known:
+            return False, "备份包含未知数据表"
+        if data.get("sha256") != tables_digest(tables):
+            return False, "备份校验和不一致"
+        counts = {name: len(rows) for name, rows in tables.items()}
+        if data.get("counts") != counts or data.get("total_rows") != sum(
+            counts.values()
+        ):
+            return False, "备份行数校验失败"
+        if data.get("schema_revision") != {2:"0002_accounting_guards",3:"0004_books"}[version]:
+            return False, "备份的数据库结构版本不匹配"
+    return True, "结构校验通过；会计 v2 备份请恢复到隔离数据库验证"
 
 
 def summarize_backup(data: Dict[str, Any]) -> Dict[str, Any]:
     """生成给前端展示的备份摘要。"""
     counts = data.get("counts") or {}
     if not counts:
-        counts = {k: len(v) for k, v in (data.get("tables") or {}).items() if isinstance(v, list)}
+        counts = {
+            k: len(v)
+            for k, v in (data.get("tables") or {}).items()
+            if isinstance(v, list)
+        }
     return {
         "created_at": data.get("created_at"),
         "note": data.get("note") or "",
@@ -331,6 +381,14 @@ async def restore_backup(
     调用方负责 commit；这里不 commit，是为了让 API 层能
     「先安全备份 → 再还原」处于一次可控流程中。
     """
+    if data.get("version",0) >= 2:
+        raise ValueError(
+            "会计 v2 备份只能通过 scripts/restore_backup.py 恢复到新的隔离数据库"
+        )
+    from ..accounting.service import active_book
+
+    if await active_book(session):
+        raise ValueError("已有会计账套，禁止旧版覆盖还原")
     ok, message = validate_backup(data)
     if not ok:
         raise ValueError(message)
@@ -351,28 +409,22 @@ async def restore_backup(
     # ---- 1) 删除：子表先删 ----
     # 逆序删除，与导入顺序相反。SQLite 默认不强制外键，
     # 但显式按依赖顺序删能在启用外键约束的部署上同样正确。
-    for name, model in reversed(BACKUP_TABLES):
+    for name, model in reversed(LEGACY_BACKUP_TABLES):
         rows = await _table_rows(session, model)
         for obj in rows:
             await session.delete(obj)
     await session.flush()
 
-    # ---- 2) 插入：父表先插 ----
-    for name, model in BACKUP_TABLES:
+    # Insert each table in dependency order, failing the whole restore on invalid data.
+    for name, model in LEGACY_BACKUP_TABLES:
         rows = tables.get(name) or []
         inserted = 0
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             if name == "system_states" and row.get("key") in SYSTEM_STATE_SKIP_KEYS:
                 continue
-            try:
-                session.add(model(**_coerce_row(model, row)))
-                inserted += 1
-            except Exception as exc:  # noqa: BLE001
-                # 单行失败不中断整表：一行坏数据不该让整个还原失败。
-                # 但计数会体现在结果里，前端能看到差异。
-                _ = exc
+            session.add(model.model_validate(_coerce_row(model, row)))
+            inserted += 1
+        await session.flush()
         counts[name] = inserted
 
     await session.flush()
@@ -397,7 +449,9 @@ def list_backup_files(directory: Optional[Path] = None) -> List[Dict[str, Any]]:
         return []
 
     items: List[Dict[str, Any]] = []
-    for path in sorted(target_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(
+        target_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    ):
         try:
             stat = path.stat()
         except OSError:

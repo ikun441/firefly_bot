@@ -30,15 +30,23 @@
   /* ============================================================
      路由表
      ============================================================ */
+  NAV_ICONS.permissions = NAV_ICONS.settings;
+  NAV_ICONS.accounting = NAV_ICONS.ledger;
+  NAV_ICONS.subjects = NAV_ICONS.ledger;
+  NAV_ICONS.operations = NAV_ICONS.transactions;
   const ROUTES = [
-    { key: 'dashboard', hash: '#dashboard', label: '财务总览', view: 'dashboard' },
-    { key: 'collector', hash: '#collector', label: '流水记账', view: 'collector' },
-    { key: 'transactions', hash: '#transactions', label: '流水管理', view: 'transactions' },
-    { key: 'excel', hash: '#excel', label: 'Excel 导入', view: 'excel' },
-    { key: 'ledger', hash: '#ledger', label: '账本管理', view: 'ledger' },
-    { key: 'report', hash: '#report', label: '周期报告', view: 'report' },
-    { key: 'assistant', hash: '#assistant', label: 'AI 助手', view: 'assistant' },
+    { key: 'accounting', hash: '#accounting', label: '会计工作台', view: 'accounting' },
+    { key: 'subjects', hash: '#subjects', label: '科目管理', view: 'subjects' },
     { key: 'budget', hash: '#budget', label: '预算管理', view: 'budget' },
+    { key: 'ledger', hash: '#ledger', label: '账套管理', view: 'books' },
+    { key: 'assistant', hash: '#assistant', label: 'AI 助手', view: 'assistant' },
+    { key: 'operations', hash: '#operations', label: '操作日志', view: 'operations' },
+    { key: 'permissions', hash: '#permissions', label: '权限设置', view: 'permissions' },
+    { key: 'dashboard', hash: '#dashboard', label: '历史收支总览', view: 'dashboard' },
+    { key: 'collector', hash: '#collector', label: '历史流水入口', view: 'collector' },
+    { key: 'transactions', hash: '#transactions', label: '历史流水查询', view: 'transactions' },
+    { key: 'excel', hash: '#excel', label: '历史流水导入', view: 'excel' },
+    { key: 'report', hash: '#report', label: '历史收支报告', view: 'report' },
     { key: 'settings', hash: '#settings', label: '系统设置', view: 'settings' },
   ];
 
@@ -50,7 +58,7 @@
         return r.key === key || r.hash === '#' + key;
       })[0];
       if (!route) {
-        router.go('dashboard');
+        router.go('accounting');
         return;
       }
       if (window.location.hash !== route.hash) {
@@ -186,7 +194,7 @@
     const route = ROUTES.filter(function (r) {
       return r.key === key;
     })[0];
-    if (!route) { router.go('dashboard'); return; }
+    if (!route) { router.go('accounting'); return; }
     const wasMobileOpen = mobileSidebar.matches && document.body.classList.contains('sidebar-is-open');
     closeSidebar(false);
     if (wasMobileOpen) FF.$('#app-main').focus({ preventScroll: true });
@@ -236,7 +244,7 @@
     }
 
     // 仅首次渲染（避免重复请求）；记账页每次都刷新以保证数据新鲜
-    if (container.dataset.rendered === '1' && key !== 'dashboard' && key !== 'collector' && key !== 'report' && key !== 'excel' && key !== 'transactions') {
+    if (container.dataset.rendered === '1' && key !== 'dashboard' && key !== 'collector' && key !== 'report' && key !== 'excel' && key !== 'transactions' && key !== 'accounting' && key !== 'permissions' && key !== 'subjects' && key !== 'operations' && key !== 'budget' && key !== 'ledger') {
       FF.refreshView(viewNode);
       window.scrollTo({ top: 0, behavior: 'instant' });
       return;
@@ -304,7 +312,7 @@
       if (statusLabel) statusLabel.textContent = label || '服务在线';
     } else if (online === false) {
       statusNode.classList.add('is-offline');
-      if (statusLabel) statusLabel.textContent = label || '离线演示';
+      if (statusLabel) statusLabel.textContent = label || '服务离线';
     } else {
       statusNode.classList.add('is-mock');
       if (statusLabel) statusLabel.textContent = label || '检测中';
@@ -321,7 +329,7 @@
       updateStatus(true, '服务在线');
       return true;
     } catch (err) {
-      updateStatus(false, '离线演示');
+      updateStatus(false, '服务离线');
       return false;
     }
   }
@@ -500,11 +508,11 @@
      ============================================================ */
   /** 从 hash 解析出合法路由键，非法或为空时回落到 dashboard。 */
   function validInitialRoute() {
-    const initial = (window.location.hash || '#dashboard').replace('#', '');
+    const initial = (window.location.hash || '#accounting').replace('#', '');
     const valid = ROUTES.some(function (r) {
       return r.key === initial;
     });
-    return valid ? initial : 'dashboard';
+    return valid ? initial : 'accounting';
   }
 
   /** 清空所有视图的渲染缓存并立刻重渲染当前页。 */
@@ -528,7 +536,7 @@
     // （nav 按钮走 router.go -> 改 hash）。若在未登录时漏注册，
     // 登录后整个导航都是死的 —— 点任何菜单都停在首页。
     window.addEventListener('hashchange', function () {
-      const key = (window.location.hash || '#dashboard').replace('#', '');
+      const key = (window.location.hash || '#accounting').replace('#', '');
       render(key);
     });
 
@@ -656,18 +664,18 @@
         await api.health();
         updateStatus(true, '服务在线');
       } catch (err) {
-        updateStatus(false, '离线演示');
+        updateStatus(false, '服务离线');
       }
     }, 30000);
 
     // 连接状态变化
     window.addEventListener('firefly:connection', function (e) {
-      updateStatus(e.detail.online, e.detail.online ? '服务在线' : '离线演示');
+      updateStatus(e.detail.online, e.detail.online ? '服务在线' : '服务离线');
     });
 
     // 欢迎提示
     if (!online) {
-      FF.toast('后端未连接，当前展示示例数据', 'warning', 4200);
+      FF.toast('后端未连接，无法读取账务数据', 'warning', 4200);
     } else {
       FF.toast('流萤已就绪', 'success', 2000);
     }

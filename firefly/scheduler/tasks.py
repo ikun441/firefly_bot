@@ -57,6 +57,9 @@ async def job_push_report() -> Dict[str, Any]:
     async with session_scope() as session:
         from ..api.deps import get_or_create_user
 
+        from ..accounting.service import has_books
+        if await has_books(session):
+            return {"skipped": True, "reason": "会计账套已启用，旧流水定时报告暂停"}
         user = await get_or_create_user(session)
 
         report = await report_service.generate_report(
@@ -139,6 +142,9 @@ async def job_alerts() -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         today = now.astimezone(ZoneInfo(config.app.timezone)).date().isoformat()
         async with session_scope() as session:
+            from ..accounting.service import has_books
+            if await has_books(session):
+                return {"skipped": True, "reason": "会计账套已启用，旧流水预警暂停"}
             user = await get_or_create_user(session)
             alerts = await collect_alerts(session, user_id=user.id, now=now)
             pending = []

@@ -4,7 +4,7 @@
    统一封装 fetch：同源调用后端 /api/*。
 
    数据来源由 config.yaml 的 app.debug 决定（后端在 /api/meta 里以 debug 字段下发）：
-     debug = false → 使用真实后端数据，后端不可达时才降级到 mock；
+     debug = false → 使用真实后端数据，后端不可达时显示错误；
      debug = true  → 强制使用模拟数据，全部请求直接走 mock，不打网络。
    这样答辩现场可以在「真实数据」与「稳定演示」之间一键切换，
    也便于前端脱机开发。
@@ -27,6 +27,26 @@
    * @param {string} path 以 / 开头
    * @param {{method?:string, body?:any, query?:object, timeout?:number, silent?:boolean}} [opts]
    */
+  function readableError(payload,status){
+    const labels={summary:'凭证摘要',accounting_date:'会计日期',amount:'金额',account_id:'会计科目',
+      lines:'凭证分录',name:'名称',starts_on:'启用日期',quantity:'数量',unit_price:'单价',
+      budget_category_id:'费用类别',reason:'操作说明',unit:'计量单位',code:'科目编码',month:'月份'};
+    const value=payload&&(payload.message||payload.detail||payload.error);
+    if(Array.isArray(value)){
+      return value.map(function(error){
+        const path=error.loc||[],field=path[path.length-1],label=labels[field]||'相关信息';
+        const index=path.find(function(x){return typeof x==='number';});
+        const prefix=index===undefined?'':'第'+(index+1)+'条分录：';
+        if(error.type==='missing'||error.type==='string_too_short')return prefix+'请填写'+label;
+        if(error.type==='too_short'&&field==='lines')return '凭证至少需要两条分录';
+        if(error.type==='string_too_long')return prefix+label+'内容过长，请缩短后重试';
+        return prefix+'请检查'+label+'，填写有效内容';
+      }).filter(function(x,i,list){return list.indexOf(x)===i;}).join('；');
+    }
+    if(typeof value==='string'&&value.trim())return value;
+    return {401:'请重新登录',403:'没有执行此操作的权限',404:'未找到相关记录',409:'资料已变化，请刷新后重试',422:'请检查必填内容后重试'}[status]||'操作未完成，请稍后重试';
+  }
+
   async function request(path, opts) {
     const options = Object.assign({ method: 'GET', timeout: 20000, silent: false }, opts || {});
 
@@ -79,10 +99,7 @@
       }
 
       if (!response.ok) {
-        const message =
-          (payload && (payload.detail || payload.message || payload.error)) ||
-          'HTTP ' + response.status + ' ' + response.statusText;
-        const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
+        const error = new Error(readableError(payload,response.status));
         error.status = response.status;
         error.payload = payload;
 

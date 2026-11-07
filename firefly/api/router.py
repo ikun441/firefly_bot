@@ -29,6 +29,8 @@ from . import (
 )
 
 api_router = APIRouter()
+from ..accounting.api import router as accounting_router
+api_router.include_router(accounting_router)
 
 for module in (
     # 登录鉴权放在最前面：它是唯一无需登录即可访问的业务模块
